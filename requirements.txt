@@ -1,0 +1,6 @@
+langfuse
+streamlit
+instructor
+google-genai
+openai
+python-dotenv

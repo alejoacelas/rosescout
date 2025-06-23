@@ -1,17 +1,17 @@
 """
 Streamlit app for Gemini API search interface with configurable prompt variables.
 """
-import streamlit as st
-import json
 import asyncio
+import json
+import os
+import pickle
 import threading
-import time
-from typing import Dict, List, Any, Optional
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
-import uuid
-import pickle
-import os
+from typing import Dict, List, Any, Optional
+
+import streamlit as st
 
 from gemini_api import gemini_create_with_search_async
 
@@ -30,30 +30,45 @@ class SearchManager:
     def __init__(self):
         self.requests_file = "search_requests.pkl"
         self._lock = threading.Lock()
+        self._requests = []
         
-        # Initialize session state
-        if 'search_requests' not in st.session_state:
-            st.session_state.search_requests = self._load_requests()
-        if 'active_searches' not in st.session_state:
-            st.session_state.active_searches = {}
+        # Load initial requests from file
+        self._load_and_merge_requests()
 
-    def _load_requests(self) -> List[SearchRequest]:
+    def _load_requests_from_file(self) -> List[SearchRequest]:
         """Load requests from file if it exists."""
         if os.path.exists(self.requests_file):
             try:
                 with open(self.requests_file, 'rb') as f:
                     return pickle.load(f)
-            except:
+            except Exception as e:
+                print(f"Error loading requests: {e}")
                 return []
         return []
 
-    def _save_requests(self, requests: List[SearchRequest]):
-        """Save requests to file."""
+    def _save_requests_to_file(self):
+        """Save requests to file with error handling."""
         try:
             with open(self.requests_file, 'wb') as f:
-                pickle.dump(requests, f)
-        except:
-            pass
+                pickle.dump(self._requests, f)
+        except Exception as e:
+            print(f"Error saving requests: {e}")
+
+    def _load_and_merge_requests(self):
+        """Load requests from file and merge with existing ones."""
+        with self._lock:
+            file_requests = self._load_requests_from_file()
+            
+            # Create a set of existing request IDs
+            existing_ids = {req.id for req in self._requests}
+            
+            # Add new requests from file that aren't already in memory
+            for req in file_requests:
+                if req.id not in existing_ids:
+                    self._requests.append(req)
+            
+            # Sort by timestamp
+            self._requests.sort(key=lambda x: x.timestamp, reverse=True)
 
     def add_request(self, prompt_variables: Dict[str, str]) -> str:
         request_id = str(uuid.uuid4())
@@ -65,23 +80,27 @@ class SearchManager:
         )
         
         with self._lock:
-            st.session_state.search_requests.append(request)
-            self._save_requests(st.session_state.search_requests)
+            self._requests.append(request)
+            self._save_requests_to_file()
         
         return request_id
 
     def get_request(self, request_id: str) -> Optional[SearchRequest]:
         with self._lock:
-            requests = self._load_requests()  # Always load fresh from file
-            for request in requests:
+            for request in self._requests:
                 if request.id == request_id:
                     return request
         return None
 
+    def get_all_requests(self) -> List[SearchRequest]:
+        """Get all requests, refreshing from file first."""
+        self._load_and_merge_requests()
+        with self._lock:
+            return self._requests.copy()
+
     def update_request_status(self, request_id: str, status: str, result: str = None, error: str = None):
         with self._lock:
-            requests = self._load_requests()
-            for request in requests:
+            for request in self._requests:
                 if request.id == request_id:
                     request.status = status
                     if result:
@@ -90,9 +109,7 @@ class SearchManager:
                         request.error = error
                     break
             
-            self._save_requests(requests)
-            # Also update session state for UI
-            st.session_state.search_requests = requests
+            self._save_requests_to_file()
 
     async def run_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str]):
         try:
@@ -121,10 +138,12 @@ class SearchManager:
         thread = threading.Thread(target=run_async_search)
         thread.daemon = True
         thread.start()
-        
-        # Store thread reference in session state
-        if 'active_searches' in st.session_state:
-            st.session_state.active_searches[request_id] = thread
+
+
+@st.cache_resource
+def get_search_manager() -> SearchManager:
+    """Get a singleton SearchManager instance."""
+    return SearchManager()
 
 
 def load_config() -> Dict[str, Any]:
@@ -186,7 +205,7 @@ def main():
     )
 
     config = load_config()
-    search_manager = SearchManager()
+    search_manager = get_search_manager()
 
     st.title("🔍 Gemini Search Interface")
 
@@ -243,16 +262,8 @@ def main():
     with results_tab:
         st.header("Search Results")
         
-        # Auto-refresh every 2 seconds
-        if st.session_state.search_requests:
-            time.sleep(0.1)  # Small delay to prevent too frequent updates
-        
-        # Refresh requests from file
-        search_manager = SearchManager()
-        st.session_state.search_requests = search_manager._load_requests()
-        
-        # Display all requests
-        requests = sorted(st.session_state.search_requests, key=lambda x: x.timestamp, reverse=True)
+        # Get all requests from the singleton search manager
+        requests = search_manager.get_all_requests()
         
         if not requests:
             st.info("No searches yet. Go to the Search Input tab to start a search.")

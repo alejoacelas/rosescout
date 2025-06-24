@@ -3,8 +3,6 @@ Streamlit app for Gemini API search interface with configurable prompt variables
 """
 import asyncio
 import json
-import os
-import pickle
 import threading
 import uuid
 from dataclasses import dataclass
@@ -13,7 +11,13 @@ from typing import Dict, List, Any, Optional
 
 import streamlit as st
 
-from gemini_api import gemini_create_with_search_async
+from gemini_api import GeminiClient
+from json_utils import (
+    extract_json_from_response, 
+    limit_json_nesting_to_level2,
+    extract_reference_fields,
+    extract_url_fields
+)
 
 
 @dataclass
@@ -28,50 +32,11 @@ class SearchRequest:
 
 class SearchManager:
     def __init__(self):
-        self.requests_file = "search_requests.pkl"
         self._lock = threading.Lock()
         self._requests = []
-        
-        # Load initial requests from file
-        self._load_and_merge_requests()
-
-    def _load_requests_from_file(self) -> List[SearchRequest]:
-        """Load requests from file if it exists."""
-        if os.path.exists(self.requests_file):
-            try:
-                with open(self.requests_file, 'rb') as f:
-                    return pickle.load(f)
-            except Exception as e:
-                print(f"Error loading requests: {e}")
-                return []
-        return []
-
-    def _save_requests_to_file(self):
-        """Save requests to file with error handling."""
-        try:
-            with open(self.requests_file, 'wb') as f:
-                pickle.dump(self._requests, f)
-        except Exception as e:
-            print(f"Error saving requests: {e}")
-
-    def _load_and_merge_requests(self):
-        """Load requests from file and merge with existing ones."""
-        with self._lock:
-            file_requests = self._load_requests_from_file()
-            
-            # Create a set of existing request IDs
-            existing_ids = {req.id for req in self._requests}
-            
-            # Add new requests from file that aren't already in memory
-            for req in file_requests:
-                if req.id not in existing_ids:
-                    self._requests.append(req)
-            
-            # Sort by timestamp
-            self._requests.sort(key=lambda x: x.timestamp, reverse=True)
 
     def add_request(self, prompt_variables: Dict[str, str]) -> str:
-        request_id = str(uuid.uuid4())
+        request_id = prompt_variables.get('person', "")[:10] + str(uuid.uuid4())[:6]
         request = SearchRequest(
             id=request_id,
             prompt_variables=prompt_variables.copy(),
@@ -81,7 +46,6 @@ class SearchManager:
         
         with self._lock:
             self._requests.append(request)
-            self._save_requests_to_file()
         
         return request_id
 
@@ -93,10 +57,9 @@ class SearchManager:
         return None
 
     def get_all_requests(self) -> List[SearchRequest]:
-        """Get all requests, refreshing from file first."""
-        self._load_and_merge_requests()
+        """Get all requests sorted by timestamp."""
         with self._lock:
-            return self._requests.copy()
+            return sorted(self._requests, key=lambda x: x.timestamp, reverse=True)
 
     def update_request_status(self, request_id: str, status: str, result: str = None, error: str = None):
         with self._lock:
@@ -108,14 +71,13 @@ class SearchManager:
                     if error:
                         request.error = error
                     break
-            
-            self._save_requests_to_file()
 
     async def run_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str]):
         try:
             self.update_request_status(request_id, 'running')
             
-            result = await gemini_create_with_search_async(
+            client = GeminiClient()
+            result = await client.generate_with_search(
                 model=model,
                 prompt_name=prompt_name,
                 prompt_variables=prompt_variables
@@ -158,43 +120,7 @@ def load_config() -> Dict[str, Any]:
         st.stop()
 
 
-def extract_json_from_response(response_text: str) -> tuple[Optional[Dict], str]:
-    """Extract JSON from response text, handling prefix/suffix."""
-    start = response_text.find('{')
-    end = response_text.rfind('}') + 1
-    
-    if start != -1 and end > start:
-        json_part = response_text[start:end]
-        try:
-            json_data = json.loads(json_part)
-            return json_data, json_part
-        except json.JSONDecodeError:
-            return None, json_part
-    return None, response_text
 
-
-def json_to_markdown(json_data: Dict, level: int = 1) -> str:
-    """Convert JSON to markdown with heading levels for indentation."""
-    markdown = ""
-    
-    for key, value in json_data.items():
-        heading = "#" * (level + 2)
-        markdown += f"\n{heading} {key}\n\n"
-        
-        if isinstance(value, dict):
-            markdown += json_to_markdown(value, level + 1)
-        elif isinstance(value, list):
-            for i, item in enumerate(value):
-                if isinstance(item, dict):
-                    markdown += f"\n{heading}# Item {i + 1}\n\n"
-                    markdown += json_to_markdown(item, level + 2)
-                else:
-                    markdown += f"- {item}\n"
-            markdown += "\n"
-        else:
-            markdown += f"{value}\n\n"
-    
-    return markdown
 
 
 def main():
@@ -256,11 +182,14 @@ def main():
                     request_id = search_manager.add_request(filtered_variables)
                     search_manager.start_search(request_id, model, prompt_name, filtered_variables)
                     
-                    st.success(f"Search started! Request ID: {request_id[:8]}...")
+                    st.success(f"Search started! Request ID: {request_id}...")
                     st.info("Check the Results tab to see progress.")
 
     with results_tab:
         st.header("Search Results")
+        
+        if st.button("🔄 Refresh Results", use_container_width=True):
+            st.rerun()
         
         # Get all requests from the singleton search manager
         requests = search_manager.get_all_requests()
@@ -299,8 +228,62 @@ def main():
                         # JSON display
                         if json_data:
                             st.markdown("## Structured Response:")
-                            markdown_content = json_to_markdown(json_data)
-                            st.markdown(markdown_content)
+                            
+                            # Process JSON to limit nesting to level 2
+                            level2_json = limit_json_nesting_to_level2(json_data)
+                            
+                            st.markdown("### JSON Structure (limited to 2 levels)")
+                            st.json(level2_json)
+                            
+                            # Create tabs for different views
+                            data_tab, references_tab, urls_tab = st.tabs([
+                                "📊 Data Table", 
+                                "📚 References", 
+                                "🔗 URLs"
+                            ])
+                            
+                            with data_tab:
+                                st.markdown("### Full Data Table")
+                                try:
+                                    st.dataframe(level2_json, row_height=100)
+                                except Exception as e:
+                                    st.error(f"Cannot display as dataframe: {e}")
+                            
+                            with references_tab:
+                                st.markdown("### Reference Fields")
+                                reference_fields = extract_reference_fields(json_data)
+                                if reference_fields:
+                                    st.dataframe(
+                                        reference_fields,
+                                        column_config={
+                                            "path": "Field Path",
+                                            "value": "Reference Value"
+                                        },
+                                        hide_index=True,
+                                        row_height=100
+                                    )
+                                else:
+                                    st.info("No 'reference' fields found in the response.")
+                            
+                            with urls_tab:
+                                st.markdown("### URL Fields")
+                                url_fields = extract_url_fields(json_data)
+                                if url_fields:
+                                    st.dataframe(
+                                        url_fields,
+                                        column_config={
+                                            "path": "Field Path",
+                                            "value": st.column_config.LinkColumn(
+                                                "URL",
+                                                help="Click to open link",
+                                                display_text="🔗 Open Link"
+                                            )
+                                        },
+                                        hide_index=True,
+                                        row_height=60
+                                    )
+                                else:
+                                    st.info("No 'url' fields found in the response.")
                         else:
                             st.warning("Could not parse JSON from response")
                             with st.expander("Raw JSON Extract"):
@@ -313,10 +296,6 @@ def main():
                         st.info("Search in progress...")
                     
                     st.divider()
-        
-        # Auto-refresh button
-        if st.button("🔄 Refresh Results"):
-            st.rerun()
 
 
 if __name__ == "__main__":

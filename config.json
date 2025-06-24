@@ -1,12 +1,12 @@
 {
   "prompt_variables": [
     {
-      "name": "person",
-      "label": "Person Name",
+      "name": "customer_profile",
+      "label": "Customer Profile",
       "type": "text",
-      "placeholder": "Enter a person's name"
+      "placeholder": "Enter a customer profile"
     }
   ],
   "default_model": "gemini-2.5-flash",
-  "default_prompt_name": "pombo-test-json-search"
+  "default_prompt_name": "gemini-customer-search"
 }

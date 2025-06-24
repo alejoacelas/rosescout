@@ -13,16 +13,11 @@ import streamlit as st
 
 from gemini_api import GeminiClient
 
-import importlib
-import json_utils
 from json_utils import (
     extract_json_from_response, 
     limit_json_nesting_to_level2,
-    extract_reference_fields,
-    extract_url_fields,
     extract_and_clean_json
 )
-importlib.reload(json_utils)
 
 
 @dataclass
@@ -217,7 +212,8 @@ def main():
                     # Show prompt variables
                     st.markdown("### Parameters:")
                     for key, value in request.prompt_variables.items():
-                        st.markdown(f"- {key.upper()}: {value}\n")
+                        st.markdown(f"**{key.upper()}**")
+                        st.markdown(f"{value}".replace("\n", "\n\n"))
                     
                     if request.status == 'completed' and request.result:
                         # Extract JSON and display results
@@ -262,7 +258,6 @@ def main():
                                                 width="small"
                                             )
                                         },
-                                        # column_order=["path", "source", "url"],
                                         hide_index=True,
                                         row_height=100
                                     )

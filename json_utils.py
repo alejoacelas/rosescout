@@ -20,9 +20,9 @@ def flatten_deep_nested(obj: Any, current_key: str = "", level: int = 0) -> Unio
                     if isinstance(nested_result, str) and '\n' in nested_result:
                         items.append(nested_result)
                     else:
-                        items.append(f"{nested_key}: {nested_result}")
+                        items.append(f"{nested_key.upper()}: {nested_result} \n")
                 else:
-                    items.append(f"{k}: {v}")
+                    items.append(f"{k.upper()}: {v} \n")
             return "\n".join(items)
         elif isinstance(obj, list):
             items = []
@@ -33,9 +33,9 @@ def flatten_deep_nested(obj: Any, current_key: str = "", level: int = 0) -> Unio
                     if isinstance(nested_result, str) and '\n' in nested_result:
                         items.append(nested_result)
                     else:
-                        items.append(f"{item_key}: {nested_result}")
+                        items.append(f"{item_key.upper()}: {nested_result} \n")
                 else:
-                    items.append(f"{item_key}: {item}")
+                    items.append(f"{item_key.upper()}: {item} \n")
             return "\n".join(items)
         else:
             return str(obj)

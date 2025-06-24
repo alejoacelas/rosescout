@@ -125,9 +125,6 @@ def load_config() -> Dict[str, Any]:
         st.stop()
 
 
-
-
-
 def main():
     st.set_page_config(
         page_title="Gemini Search Interface",
@@ -230,11 +227,15 @@ def main():
                         if json_data:
                             st.markdown("### Response:")
                             
-                            # Process JSON to limit nesting to level 2
-                            level2_json = limit_json_nesting_to_level2(json_data)
+                            # Extract references and clean JSON for separate display
+                            cleaned_json, reference_fields = extract_and_clean_json(json_data)
                             
-                            st.markdown("**Raw JSON**")
-                            st.json(level2_json, expanded=False)
+                            # Process cleaned JSON to limit nesting to level 2 (for Response tab)
+                            level2_json_cleaned = limit_json_nesting_to_level2(cleaned_json)
+                            
+                            # Show original JSON in expander
+                            st.markdown("**Original JSON**")
+                            st.json(json_data, expanded=False)
                             
                             # Create tabs for different views
                             data_tab, references_tab = st.tabs([
@@ -244,12 +245,11 @@ def main():
                             
                             with data_tab:
                                 try:
-                                    st.dataframe(level2_json, row_height=100)
+                                    st.dataframe(level2_json_cleaned, row_height=100)
                                 except Exception as e:
                                     st.error(f"Cannot display as dataframe: {e}")
                             
                             with references_tab:
-                                reference_fields = extract_reference_fields(json_data)
                                 if reference_fields:
                                     st.dataframe(
                                         reference_fields,

@@ -9,7 +9,7 @@ from typing import Optional, Dict, List, Any
 from google import genai
 from google.genai import types
 from langfuse import observe, get_client
-
+import langfuse
 
 @dataclass
 class GroundingSource:
@@ -218,6 +218,23 @@ class GeminiClient:
                     } if search_metadata.usage_metadata else None
                 }
             )
+            
+            # # Record web search queries count
+            # if search_metadata.web_search_queries:
+            #     web_search_count = len(search_metadata.web_search_queries)
+            #     self._langfuse.score(
+            #         trace_id=self._langfuse.get_current_trace_id(),
+            #         name="web_search_queries_count",
+            #         value=web_search_count,
+            #     )
+            
+            # # Record thoughts token count
+            # if search_metadata.usage_metadata and search_metadata.usage_metadata.thoughts_token_count:
+            #     self._langfuse.score(
+            #         trace_id=self._langfuse.get_current_trace_id(),
+            #         name="thoughts_token_count",
+            #         value=search_metadata.usage_metadata.thoughts_token_count,
+            #     )
             
             return text
             

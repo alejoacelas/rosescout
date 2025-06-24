@@ -1,0 +1,2 @@
+[MESSAGES CONTROL]
+# disable = no-member # Ignore no-member errors for Langfuse class (dynamic methods)

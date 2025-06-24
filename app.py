@@ -210,10 +210,10 @@ def main():
                     st.caption(f"Started: {request.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
                     
                     # Show prompt variables
-                    st.markdown("### Parameters:")
+                    parameters_toggle = st.expander("Input Parameters:", expanded=True)
                     for key, value in request.prompt_variables.items():
-                        st.markdown(f"**{key.upper()}**")
-                        st.markdown(f"{value}".replace("\n", "\n\n"))
+                        parameters_toggle.markdown(f"**{key.upper()}**")
+                        parameters_toggle.markdown(f"{value}".replace("\n", "\n\n"))
                     
                     if request.status == 'completed' and request.result:
                         # Extract JSON and display results

@@ -12,12 +12,17 @@ from typing import Dict, List, Any, Optional
 import streamlit as st
 
 from gemini_api import GeminiClient
+
+import importlib
+import json_utils
 from json_utils import (
     extract_json_from_response, 
     limit_json_nesting_to_level2,
     extract_reference_fields,
-    extract_url_fields
+    extract_url_fields,
+    extract_and_clean_json
 )
+importlib.reload(json_utils)
 
 
 @dataclass
@@ -150,7 +155,7 @@ def main():
                 name = var_config['name']
                 placeholder = var_config.get('placeholder', f"Enter {label.lower()}")
                 
-                prompt_variables[name] = st.text_input(
+                prompt_variables[name] = st.text_area(
                     label,
                     placeholder=placeholder,
                     key=f"input_{name}"
@@ -213,77 +218,56 @@ def main():
                     st.caption(f"Started: {request.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
                     
                     # Show prompt variables
-                    st.markdown("## Parameters:")
+                    st.markdown("### Parameters:")
                     for key, value in request.prompt_variables.items():
-                        st.markdown(f"- {key}: {value}")
+                        st.markdown(f"- {key.upper()}: {value}\n")
                     
                     if request.status == 'completed' and request.result:
                         # Extract JSON and display results
                         json_data, raw_json = extract_json_from_response(request.result)
                         
-                        # Raw response toggle
-                        with st.expander("Raw Response"):
-                            st.text(request.result)
-                        
                         # JSON display
                         if json_data:
-                            st.markdown("## Structured Response:")
+                            st.markdown("### Response:")
                             
                             # Process JSON to limit nesting to level 2
                             level2_json = limit_json_nesting_to_level2(json_data)
                             
-                            st.markdown("### JSON Structure (limited to 2 levels)")
-                            st.json(level2_json)
+                            st.markdown("**Raw JSON**")
+                            st.json(level2_json, expanded=False)
                             
                             # Create tabs for different views
-                            data_tab, references_tab, urls_tab = st.tabs([
-                                "📊 Data Table", 
-                                "📚 References", 
-                                "🔗 URLs"
+                            data_tab, references_tab = st.tabs([
+                                "Response", 
+                                "References", 
                             ])
                             
                             with data_tab:
-                                st.markdown("### Full Data Table")
                                 try:
                                     st.dataframe(level2_json, row_height=100)
                                 except Exception as e:
                                     st.error(f"Cannot display as dataframe: {e}")
                             
                             with references_tab:
-                                st.markdown("### Reference Fields")
                                 reference_fields = extract_reference_fields(json_data)
                                 if reference_fields:
                                     st.dataframe(
                                         reference_fields,
                                         column_config={
                                             "path": "Field Path",
-                                            "value": "Reference Value"
+                                            "source": "Source",
+                                            "url": st.column_config.LinkColumn(
+                                                "URL",
+                                                display_text="🔗 Open Link",
+                                                width="small"
+                                            )
                                         },
+                                        # column_order=["path", "source", "url"],
                                         hide_index=True,
                                         row_height=100
                                     )
                                 else:
                                     st.info("No 'reference' fields found in the response.")
-                            
-                            with urls_tab:
-                                st.markdown("### URL Fields")
-                                url_fields = extract_url_fields(json_data)
-                                if url_fields:
-                                    st.dataframe(
-                                        url_fields,
-                                        column_config={
-                                            "path": "Field Path",
-                                            "value": st.column_config.LinkColumn(
-                                                "URL",
-                                                help="Click to open link",
-                                                display_text="🔗 Open Link"
-                                            )
-                                        },
-                                        hide_index=True,
-                                        row_height=60
-                                    )
-                                else:
-                                    st.info("No 'url' fields found in the response.")
                         else:
                             st.warning("Could not parse JSON from response")
                             with st.expander("Raw JSON Extract"):

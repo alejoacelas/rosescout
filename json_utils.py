@@ -51,6 +51,43 @@ def flatten_deep_nested(obj: Any, current_key: str = "", level: int = 0) -> Unio
             return obj
 
 
+def remove_references_from_json(json_data: Dict) -> Dict:
+    """
+    Remove all 'references' fields from JSON data recursively.
+    Returns a new dictionary without references fields.
+    """
+    def clean_object(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            result = {}
+            for key, value in obj.items():
+                if key.lower() != 'references':
+                    result[key] = clean_object(value)
+            return result
+        elif isinstance(obj, list):
+            return [clean_object(item) for item in obj]
+        else:
+            return obj
+    
+    return clean_object(json_data)
+
+
+def extract_and_clean_json(json_data: Dict) -> tuple[Dict, List[Dict[str, str]]]:
+    """
+    Extract references from JSON and return both cleaned JSON (without references) 
+    and the extracted references.
+    
+    Returns:
+        tuple: (cleaned_json_data, reference_fields)
+    """
+    # Extract references first
+    reference_fields = extract_reference_fields(json_data)
+    
+    # Remove references from the JSON data
+    cleaned_json = remove_references_from_json(json_data)
+    
+    return cleaned_json, reference_fields
+
+
 def limit_json_nesting_to_level2(json_data: Dict) -> Dict:
     """
     Limit JSON nesting to maximum level 2.
@@ -137,10 +174,30 @@ def extract_fields_by_name(json_data: Dict, field_name: str, current_path: str =
                 new_path = f"{path}_{key}" if path else key
                 
                 if key.lower() == field_name.lower():
-                    results.append({
-                        'path': new_path,
-                        'value': str(value) if not isinstance(value, str) else value
-                    })
+                    if isinstance(value, dict):
+                        # Add path to the existing dictionary
+                        result_dict = value.copy()  # Make a copy to avoid modifying original
+                        result_dict['path'] = new_path
+                        results.append(result_dict)
+                    elif isinstance(value, list):
+                        # If it's a list of dictionaries, add path to each dictionary
+                        for item in value:
+                            if isinstance(item, dict):
+                                result_dict = item.copy()
+                                result_dict['path'] = new_path
+                                results.append(result_dict)
+                            else:
+                                # For non-dict items in list, create simple structure
+                                results.append({
+                                    'content': item,
+                                    'path': new_path
+                                })
+                    else:
+                        # For primitive values (strings, numbers, etc.), create simple structure
+                        results.append({
+                            'content': value,
+                            'path': new_path
+                        })
                 
                 # Continue traversing even if we found the field, in case there are nested structures
                 if isinstance(value, (dict, list)):
@@ -156,7 +213,7 @@ def extract_fields_by_name(json_data: Dict, field_name: str, current_path: str =
 
 def extract_reference_fields(json_data: Dict) -> List[Dict[str, str]]:
     """Extract all 'reference' fields from JSON with their paths."""
-    return extract_fields_by_name(json_data, 'reference')
+    return extract_fields_by_name(json_data, 'references')
 
 
 def extract_url_fields(json_data: Dict) -> List[Dict[str, str]]:

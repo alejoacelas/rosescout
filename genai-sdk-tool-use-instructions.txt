@@ -1,0 +1,466 @@
+# Integrating External Tools with Gemini using genai SDK
+
+## Overview
+
+Function calling lets you connect models to external tools and APIs. Instead of generating text responses, the model understands when to call specific functions and provides the necessary parameters to execute real-world actions. This tutorial covers three main approaches to integrate external tools with Gemini using the new Google genai SDK.
+
+## Installation and Setup
+
+### 1. Install the SDK
+
+```bash
+pip install google-genai
+```
+
+### 2. Get API Key
+
+- Visit [Google AI Studio](https://aistudio.google.com/app/apikey) to get your API key
+- Set your API key as an environment variable:
+
+```bash
+export GOOGLE_API_KEY="your-api-key-here"
+```
+
+### 3. Basic Client Setup
+
+```python
+from google import genai
+import os
+
+# For Gemini Developer API
+client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+
+# For Vertex AI (if using Google Cloud)
+# client = genai.Client(
+#     vertexai=True,
+#     project='your-project-id',
+#     location='us-central1'
+# )
+```
+
+## Approach 1: Automatic Function Calling (Recommended)
+
+You can pass a Python function directly and it will be automatically called and responded. This is the simplest approach where the SDK handles everything automatically.
+
+### Example: Weather Service Integration
+
+```python
+from google.genai import types
+
+def get_current_weather(location: str) -> dict:
+    """Returns the current weather for a given location.
+    
+    Args:
+        location: The city and state, e.g. San Francisco, CA
+        
+    Returns:
+        A dictionary containing weather information.
+    """
+    # Simulate API call to weather service
+    return {
+        "location": location,
+        "temperature": "72°F",
+        "condition": "sunny",
+        "humidity": "45%"
+    }
+
+# Generate content with automatic function calling
+response = client.models.generate_content(
+    model='gemini-2.0-flash-001',
+    contents='What is the weather like in Boston?',
+    config=types.GenerateContentConfig(
+        tools=[get_current_weather]  # Pass the function directly
+    )
+)
+
+print(response.text)
+# Output: The weather in Boston is currently 72°F and sunny with 45% humidity.
+```
+
+### Key Benefits of Automatic Function Calling:
+- **Automatic schema generation** from function signatures and docstrings
+- **Automatic execution** of function calls
+- **Automatic response handling** back to the model
+- **Type safety** through Python type hints
+
+## Approach 2: Manual Function Declaration
+
+For more control, you can manually declare functions using JSON schema:
+
+```python
+from google.genai import types
+
+# Define function declaration
+weather_function = types.FunctionDeclaration(
+    name='get_current_weather',
+    description='Get the current weather in a given location',
+    parameters=types.Schema(
+        type='OBJECT',
+        properties={
+            'location': types.Schema(
+                type='STRING',
+                description='The city and state, e.g. San Francisco, CA'
+            ),
+            'unit': types.Schema(
+                type='STRING',
+                enum=['celsius', 'fahrenheit'],
+                description='Temperature unit'
+            )
+        },
+        required=['location']
+    )
+)
+
+# Create tool with function declaration
+tool = types.Tool(function_declarations=[weather_function])
+
+# Generate content
+response = client.models.generate_content(
+    model='gemini-2.0-flash-001',
+    contents='What is the weather like in Boston in Celsius?',
+    config=types.GenerateContentConfig(
+        tools=[tool],
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+            disable=True  # Disable automatic calling
+        )
+    )
+)
+
+# Check if model wants to call a function
+if response.function_calls:
+    function_call = response.function_calls[0]
+    print(f"Function to call: {function_call.name}")
+    print(f"Arguments: {function_call.args}")
+    
+    # Execute the function manually
+    if function_call.name == 'get_current_weather':
+        result = get_current_weather(**function_call.args)
+        
+        # Send result back to model
+        function_response = types.Part.from_function_response(
+            name=function_call.name,
+            response={"result": result}
+        )
+        
+        # Create conversation history
+        contents = [
+            types.Content(role='user', parts=[
+                types.Part.from_text('What is the weather like in Boston in Celsius?')
+            ]),
+            types.Content(role='model', parts=[
+                types.Part.from_function_call(
+                    name=function_call.name,
+                    args=function_call.args
+                )
+            ]),
+            types.Content(role='user', parts=[function_response])
+        ]
+        
+        # Get final response
+        final_response = client.models.generate_content(
+            model='gemini-2.0-flash-001',
+            contents=contents,
+            config=types.GenerateContentConfig(tools=[tool])
+        )
+        
+        print(final_response.text)
+```
+
+## Approach 3: Parallel Function Calling
+
+Parallel function calling lets you execute multiple functions at once and is used when the functions are not dependent on each other.
+
+```python
+from google.genai import types
+
+def power_disco_ball(power: bool) -> dict:
+    """Powers the spinning disco ball.
+    
+    Args:
+        power: Whether to turn the disco ball on or off.
+    """
+    return {"status": f"Disco ball powered {'on' if power else 'off'}"}
+
+def start_music(energetic: bool, loud: bool) -> dict:
+    """Play music with specified parameters.
+    
+    Args:
+        energetic: Whether the music is energetic or not.
+        loud: Whether the music is loud or not.
+    """
+    music_type = "energetic" if energetic else "chill"
+    volume = "loud" if loud else "quiet"
+    return {"music_type": music_type, "volume": volume}
+
+def dim_lights(brightness: float) -> dict:
+    """Dim the lights.
+    
+    Args:
+        brightness: The brightness level (0.0 to 1.0).
+    """
+    return {"brightness": brightness}
+
+# Use multiple functions
+config = types.GenerateContentConfig(
+    tools=[power_disco_ball, start_music, dim_lights],
+    tool_config=types.ToolConfig(
+        function_calling_config=types.FunctionCallingConfig(mode='ANY')
+    )
+)
+
+response = client.models.generate_content(
+    model='gemini-2.0-flash-001',
+    contents='Turn this place into a party!',
+    config=config
+)
+
+print(response.text)
+```
+
+## Real-World Example: Database Integration
+
+Here's a practical example integrating with a database:
+
+```python
+import sqlite3
+from typing import List, Dict
+
+def search_products(category: str, max_price: float = None) -> List[Dict]:
+    """Search for products in the database.
+    
+    Args:
+        category: Product category to search in
+        max_price: Maximum price filter (optional)
+        
+    Returns:
+        List of matching products
+    """
+    # Simulate database query
+    conn = sqlite3.connect('products.db')
+    cursor = conn.cursor()
+    
+    if max_price:
+        cursor.execute(
+            "SELECT name, price, description FROM products WHERE category = ? AND price <= ?",
+            (category, max_price)
+        )
+    else:
+        cursor.execute(
+            "SELECT name, price, description FROM products WHERE category = ?",
+            (category,)
+        )
+    
+    products = []
+    for row in cursor.fetchall():
+        products.append({
+            "name": row[0],
+            "price": row[1],
+            "description": row[2]
+        })
+    
+    conn.close()
+    return products
+
+def add_to_cart(product_name: str, quantity: int = 1) -> dict:
+    """Add a product to the shopping cart.
+    
+    Args:
+        product_name: Name of the product to add
+        quantity: Number of items to add
+        
+    Returns:
+        Cart status
+    """
+    # Simulate adding to cart
+    return {
+        "status": "success",
+        "message": f"Added {quantity} x {product_name} to cart"
+    }
+
+# Create shopping assistant
+response = client.models.generate_content(
+    model='gemini-2.0-flash-001',
+    contents='I need a laptop under $1000. Can you help me find one and add it to my cart?',
+    config=types.GenerateContentConfig(
+        tools=[search_products, add_to_cart],
+        system_instruction="You are a helpful shopping assistant. Help users find products and manage their cart."
+    )
+)
+
+print(response.text)
+```
+
+## Function Calling Modes
+
+The Gemini API lets you control how the model uses the provided tools (function declarations). Specifically, you can set the mode within the function_calling_config.
+
+### AUTO Mode (Default)
+```python
+config = types.GenerateContentConfig(
+    tools=[your_function],
+    tool_config=types.ToolConfig(
+        function_calling_config=types.FunctionCallingConfig(mode='AUTO')
+    )
+)
+```
+
+### ANY Mode (Force Function Calling)
+```python
+config = types.GenerateContentConfig(
+    tools=[your_function],
+    tool_config=types.ToolConfig(
+        function_calling_config=types.FunctionCallingConfig(
+            mode='ANY',
+            allowed_function_names=['specific_function']  # Optional
+        )
+    )
+)
+```
+
+### NONE Mode (Disable Function Calling)
+```python
+config = types.GenerateContentConfig(
+    tools=[your_function],
+    tool_config=types.ToolConfig(
+        function_calling_config=types.FunctionCallingConfig(mode='NONE')
+    )
+)
+```
+
+## Best Practices
+
+### 1. Function Design
+- **Clear descriptions**: Be extremely specific in function and parameter descriptions
+- **Strong typing**: Use type hints and specific types (enum for limited values)
+- **Descriptive names**: Use clear function names without spaces or special characters
+
+### 2. Error Handling
+```python
+def robust_api_call(endpoint: str) -> dict:
+    """Make a robust API call with error handling.
+    
+    Args:
+        endpoint: API endpoint to call
+        
+    Returns:
+        API response or error information
+    """
+    try:
+        # Your API call logic here
+        result = make_api_call(endpoint)
+        return {"success": True, "data": result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+```
+
+### 3. Security Considerations
+- Validate all function inputs
+- Use proper authentication for external APIs
+- Avoid exposing sensitive data in function calls
+- Implement rate limiting for external API calls
+
+### 4. Performance Optimization
+- **Temperature**: Use low temperature (0-0.3) for deterministic function calls
+- **Tool selection**: Limit active tools to 10-20 for best performance
+- **Caching**: Implement caching for frequently called functions
+
+```python
+from functools import lru_cache
+
+@lru_cache(maxsize=128)
+def cached_api_call(query: str) -> dict:
+    """Cached API call for frequently requested data."""
+    # Your expensive API call here
+    pass
+```
+
+## Advanced Features
+
+### Multi-Tool Integration
+With Gemini 2.0, you can enable multiple tools combining native tools with function calling at the same time.
+
+```python
+# Combine custom functions with native tools
+tools = [
+    {'google_search': {}},  # Native Google Search
+    {'code_execution': {}},  # Native code execution
+    your_custom_function    # Your custom function
+]
+
+config = types.GenerateContentConfig(tools=tools)
+```
+
+### Model Context Protocol (MCP) Integration
+Model Context Protocol (MCP) is an open standard to connect AI applications with external tools, data sources, and systems.
+
+```python
+import asyncio
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def use_mcp_server():
+    server_params = StdioServerParameters(
+        command="npx",
+        args=["-y", "@philschmid/weather-mcp"]
+    )
+    
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            
+            # Get tools from MCP session
+            mcp_tools = await session.list_tools()
+            
+            # Convert to Gemini tools
+            tools = [
+                types.Tool(function_declarations=[{
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": {
+                        k: v for k, v in tool.inputSchema.items()
+                        if k not in ["additionalProperties", "$schema"]
+                    }
+                }])
+                for tool in mcp_tools.tools
+            ]
+            
+            # Use with Gemini
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents="What's the weather like?",
+                config=types.GenerateContentConfig(tools=tools)
+            )
+```
+
+## Debugging and Testing
+
+### Enable Debug Mode
+```python
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+
+# Your function calls will now show detailed logs
+```
+
+### Test Function Schema Generation
+```python
+from google.genai import types
+
+def test_function(param: str) -> dict:
+    """Test function for schema generation."""
+    return {"result": param}
+
+# Check generated schema
+fn_decl = types.FunctionDeclaration.from_callable(
+    callable=test_function, 
+    client=client
+)
+print(fn_decl.to_json_dict())
+```
+
+## Conclusion
+
+The Google genai SDK provides powerful and flexible ways to integrate external tools with Gemini models. Start with automatic function calling for simplicity, then move to manual declarations for more control. Always follow best practices for security, error handling, and performance optimization.
+
+For more examples and advanced use cases, check out the [official Google AI documentation](https://ai.google.dev/gemini-api/docs/function-calling) and the [cookbook examples](https://github.com/google-gemini/cookbook).

@@ -3,13 +3,16 @@ Async Gemini API wrapper with search functionality and Langfuse observability.
 """
 import os
 import re
+import logging
 from dataclasses import dataclass
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Callable, Union
 
 from google import genai
 from google.genai import types
 from langfuse import observe, get_client
-import langfuse
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 @dataclass
 class GroundingSource:
@@ -114,14 +117,17 @@ class GeminiClient:
             usage_metadata=self._create_usage_metadata(response.usage_metadata)
         )
     
-    def _build_generation_config(self) -> types.GenerateContentConfig:
-        """Build the generation configuration with search tools."""
-        search_tool = types.Tool(google_search=types.GoogleSearch())
-        url_context_tool = types.Tool(url_context=types.UrlContext())
+    def _build_generation_config(self, tools: Optional[List[Union[Callable, types.Tool]]] = None) -> types.GenerateContentConfig:
+        """Build the generation configuration with specified tools.
+        
+        Args:
+            tools: List of tools to include (functions or Tool objects)
+        """
+        tool_list = tools or []
         
         return types.GenerateContentConfig(
             thinking_config=types.ThinkingConfig(thinking_budget=-1),
-            tools=[search_tool, url_context_tool],
+            tools=tool_list,
             response_mime_type="text/plain",
         )
     
@@ -134,21 +140,46 @@ class GeminiClient:
             )
         ]
     
+    def _log_tool_usage(self, response, tools: List[Callable]):
+        """Log tool usage details."""
+        if not response.candidates or not response.candidates[0].content.parts:
+            return
+            
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, 'function_call') and part.function_call:
+                func_call = part.function_call
+                tool_names = [tool.__name__ for tool in tools]
+                if func_call.name in tool_names:
+                    logger.info(f"🔧 Tool used: {func_call.name}")
+                    logger.info(f"   Arguments: {dict(func_call.args)}")
+                    
+                    # Log response if available and not too long
+                    if hasattr(part, 'function_response') and part.function_response:
+                        response_str = str(part.function_response.response)
+                        if len(response_str) <= 200:
+                            logger.info(f"   Response: {response_str}")
+                        else:
+                            logger.info(f"   Response: {response_str[:197]}...")
+
     @observe(as_type="generation")
-    async def generate_with_search(
+    async def generate_content(
         self, 
         *,
         model: str,
-        prompt_name: str,
-        prompt_variables: Optional[Dict[str, Any]] = None
+        prompt: Optional[str] = None,
+        prompt_name: Optional[str] = None,
+        prompt_variables: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Callable]] = None
     ) -> str:
         """
-        Generate content using Gemini with search capabilities.
+        Generate content using Gemini with specified tools.
         
         Args:
             model: Gemini model name (e.g., 'gemini-2.5-flash')
-            prompt_name: Name of the prompt in Langfuse
+            prompt: Direct prompt text (if not using Langfuse)
+            prompt_name: Name of the prompt in Langfuse (if not using direct prompt)
             prompt_variables: Variables to substitute in the prompt
+            tools: List of tool functions to include
             
         Returns:
             Generated text response
@@ -156,17 +187,35 @@ class GeminiClient:
         Raises:
             GeminiAPIError: If API call fails or response is invalid
         """
+        if not prompt and not prompt_name:
+            raise GeminiAPIError("Either prompt or prompt_name must be provided")
+        
         try:
-            # Get and compile prompt from Langfuse
-            prompt = self._langfuse.get_prompt(prompt_name)
-            content_text = prompt.compile(**(prompt_variables or {}))
+            # Get content text
+            if prompt_name:
+                # Get and compile prompt from Langfuse
+                langfuse_prompt = self._langfuse.get_prompt(prompt_name)
+                content_text = langfuse_prompt.compile(**(prompt_variables or {}))
+                self._langfuse.update_current_generation(prompt=langfuse_prompt)
+                prompt_identifier = f"prompt_name: {prompt_name}"
+            else:
+                content_text = prompt
+                prompt_identifier = f"direct: {prompt[:50]}{'...' if len(prompt) > 50 else ''}"
             
-            # Update Langfuse generation with prompt info
-            self._langfuse.update_current_generation(prompt=prompt)
+            # Log the Gemini call
+            logger.info(f"🤖 Gemini call - Model: {model}, Prompt: {prompt_identifier}")
+            
+            # Build tools list
+            tool_list = tools or []
+            
+            # Log selected tools
+            if tool_list:
+                tool_names = [tool.__name__ for tool in tool_list]
+                logger.info(f"🔧 Selected tools: {', '.join(tool_names)}")
             
             # Create request content and config
             contents = self._create_content(content_text)
-            config = self._build_generation_config()
+            config = self._build_generation_config(tool_list)
             
             # Make async API call
             response = await self._client.aio.models.generate_content(
@@ -175,6 +224,9 @@ class GeminiClient:
                 config=config,
             )
             
+            # Log tool usage
+            self._log_tool_usage(response, tool_list or [])
+            
             # Validate response
             if not response.candidates or not response.candidates[0].content.parts:
                 raise GeminiAPIError("Invalid response from Gemini API")
@@ -182,7 +234,7 @@ class GeminiClient:
             # Extract response text
             text = response.candidates[0].content.parts[0].text
             
-            # Extract and process grounding metadata
+            # Extract and process grounding metadata for Langfuse
             grounding_metadata = response.candidates[0].grounding_metadata
             grounding_sources = self._extract_grounding_sources(grounding_metadata)
             
@@ -219,28 +271,12 @@ class GeminiClient:
                 }
             )
             
-            # # Record web search queries count
-            # if search_metadata.web_search_queries:
-            #     web_search_count = len(search_metadata.web_search_queries)
-            #     self._langfuse.score(
-            #         trace_id=self._langfuse.get_current_trace_id(),
-            #         name="web_search_queries_count",
-            #         value=web_search_count,
-            #     )
-            
-            # # Record thoughts token count
-            # if search_metadata.usage_metadata and search_metadata.usage_metadata.thoughts_token_count:
-            #     self._langfuse.score(
-            #         trace_id=self._langfuse.get_current_trace_id(),
-            #         name="thoughts_token_count",
-            #         value=search_metadata.usage_metadata.thoughts_token_count,
-            #     )
-            
             return text
             
         except Exception as e:
             if isinstance(e, GeminiAPIError):
                 raise
             raise GeminiAPIError(f"Failed to generate content: {str(e)}") from e
+    
 
 

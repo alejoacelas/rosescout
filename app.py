@@ -12,6 +12,7 @@ from typing import Dict, List, Any, Optional
 import streamlit as st
 
 from gemini_api import GeminiClient
+from tools import get_coordinates, calculate_distance, web_search
 
 from json_utils import (
     extract_json_from_response, 
@@ -26,8 +27,13 @@ class SearchRequest:
     prompt_variables: Dict[str, str]
     timestamp: datetime
     status: str  # 'pending', 'running', 'completed', 'error'
+    selected_tools: List[str] = None
     result: Optional[str] = None
     error: Optional[str] = None
+    
+    def __post_init__(self):
+        if self.selected_tools is None:
+            self.selected_tools = []
 
 
 class SearchManager:
@@ -35,13 +41,16 @@ class SearchManager:
         self._lock = threading.Lock()
         self._requests = []
 
-    def add_request(self, prompt_variables: Dict[str, str]) -> str:
-        request_id = prompt_variables.get('person', "")[:10] + str(uuid.uuid4())[:6]
+    def add_request(self, prompt_variables: Dict[str, str], selected_tools: List[str] = None) -> str:
+        # Use first prompt variable value for request ID, or fallback to uuid
+        first_value = next(iter(prompt_variables.values()), "") if prompt_variables else ""
+        request_id = first_value[:10] + str(uuid.uuid4())[:6]
         request = SearchRequest(
             id=request_id,
             prompt_variables=prompt_variables.copy(),
             timestamp=datetime.now(),
-            status='pending'
+            status='pending',
+            selected_tools=selected_tools or []
         )
         
         with self._lock:
@@ -72,15 +81,29 @@ class SearchManager:
                         request.error = error
                     break
 
-    async def run_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str]):
+    async def run_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str], selected_tools: List[str]):
         try:
             self.update_request_status(request_id, 'running')
             
+            # Map tool names to actual functions
+            tool_mapping = {
+                'get_coordinates': get_coordinates,
+                'calculate_distance': calculate_distance,
+                'web_search': web_search
+            }
+            
+            # Build tools list
+            tools = []
+            for tool_name in selected_tools:
+                if tool_name in tool_mapping:
+                    tools.append(tool_mapping[tool_name])
+            
             client = GeminiClient()
-            result = await client.generate_with_search(
+            result = await client.generate_content(
                 model=model,
                 prompt_name=prompt_name,
-                prompt_variables=prompt_variables
+                prompt_variables=prompt_variables,
+                tools=tools
             )
             
             self.update_request_status(request_id, 'completed', result=result)
@@ -88,12 +111,12 @@ class SearchManager:
         except Exception as e:
             self.update_request_status(request_id, 'error', error=str(e))
 
-    def start_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str]):
+    def start_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str], selected_tools: List[str]):
         def run_async_search():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(self.run_search(request_id, model, prompt_name, prompt_variables))
+                loop.run_until_complete(self.run_search(request_id, model, prompt_name, prompt_variables, selected_tools))
             finally:
                 loop.close()
 
@@ -153,6 +176,27 @@ def main():
                     key=f"input_{name}"
                 )
             
+            # Tools selection
+            st.subheader("🔧 Available Tools")
+            st.caption("Select which tools Gemini can use for this search:")
+            
+            selected_tools = []
+            available_tools = config.get('available_tools', [])
+            
+            # Create checkboxes for each available tool
+            cols = st.columns(2)
+            for i, tool in enumerate(available_tools):
+                col = cols[i % 2]
+                with col:
+                    is_checked = tool.get('enabled_by_default', True)
+                    if st.checkbox(
+                        f"{tool['label']}",
+                        value=is_checked,
+                        help=tool.get('description', ''),
+                        key=f"tool_{tool['name']}"
+                    ):
+                        selected_tools.append(tool['name'])
+            
             # Advanced settings
             with st.expander("Advanced Settings"):
                 model = st.text_input(
@@ -176,8 +220,15 @@ def main():
                     # Filter out empty values
                     filtered_variables = {k: v for k, v in prompt_variables.items() if v.strip()}
                     
-                    request_id = search_manager.add_request(filtered_variables)
-                    search_manager.start_search(request_id, model, prompt_name, filtered_variables)
+                    # Show selected tools summary
+                    if selected_tools:
+                        tool_names = [tool['label'] for tool in available_tools if tool['name'] in selected_tools]
+                        st.info(f"Selected tools: {', '.join(tool_names)}")
+                    else:
+                        st.warning("No tools selected. The search will run without any tools.")
+                    
+                    request_id = search_manager.add_request(filtered_variables, selected_tools)
+                    search_manager.start_search(request_id, model, prompt_name, filtered_variables, selected_tools)
                     
                     st.success(f"Search started! Request ID: {request_id}...")
                     st.info("Check the Results tab to see progress.")
@@ -206,7 +257,7 @@ def main():
                     
                     status_icon = status_colors.get(request.status, '❓')
                     
-                    st.subheader(f"{status_icon} Request {request.id[:8]} - {request.status.title()}")
+                    st.subheader(f"{status_icon} {request.id[:15]} - {request.status.title()}")
                     st.caption(f"Started: {request.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
                     
                     # Show prompt variables
@@ -214,6 +265,14 @@ def main():
                     for key, value in request.prompt_variables.items():
                         parameters_toggle.markdown(f"**{key.upper()}**")
                         parameters_toggle.markdown(f"{value}".replace("\n", "\n\n"))
+                    
+                    # Show selected tools
+                    if request.selected_tools:
+                        available_tools = config.get('available_tools', [])
+                        tool_labels = [tool['label'] for tool in available_tools if tool['name'] in request.selected_tools]
+                        parameters_toggle.markdown(f"**SELECTED TOOLS:** {', '.join(tool_labels)}")
+                    else:
+                        parameters_toggle.markdown("**SELECTED TOOLS:** None")
                     
                     if request.status == 'completed' and request.result:
                         # Extract JSON and display results

@@ -4,3 +4,5 @@ instructor
 google-genai
 openai
 python-dotenv
+googlemaps
+httpx

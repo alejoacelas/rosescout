@@ -1,12 +1,35 @@
 {
   "prompt_variables": [
     {
-      "name": "customer_profile",
-      "label": "Customer Profile",
+      "name": "institution",
+      "label": "Institution",
       "type": "text",
-      "placeholder": "Enter a customer profile"
+      "placeholder": "Enter an institution"
     }
   ],
   "default_model": "gemini-2.5-pro",
-  "default_prompt_name": "gemini-customer-search"
+  "default_prompt_name": "legitimacy-verification",
+  "available_tools": [
+    {
+      "name": "web_search",
+      "label": "Web Search",
+      "description": "Search the web using Tavily Search API",
+      "enabled_by_default": true,
+      "type": "custom"
+    },
+    {
+      "name": "get_coordinates",
+      "label": "Get Coordinates",
+      "description": "Get latitude/longitude for an address",
+      "enabled_by_default": true,
+      "type": "custom"
+    },
+    {
+      "name": "calculate_distance",
+      "label": "Calculate Distance",
+      "description": "Calculate distance between two addresses",
+      "enabled_by_default": true,
+      "type": "custom"
+    }
+  ]
 }

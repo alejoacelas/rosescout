@@ -10,6 +10,10 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 import streamlit as st
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from gemini_api import GeminiClient
 
@@ -118,6 +122,35 @@ def load_config() -> Dict[str, Any]:
     except json.JSONDecodeError:
         st.error("Invalid JSON in config file.")
         st.stop()
+
+
+def convert_lists_to_strings(data):
+    """Convert lists and complex objects in data to strings for dataframe compatibility."""
+    if isinstance(data, list):
+        return json.dumps(data, ensure_ascii=False, indent=2)
+    elif isinstance(data, dict):
+        return {k: convert_lists_to_strings(v) for k, v in data.items()}
+    elif isinstance(data, (int, float, str, bool)) or data is None:
+        return data
+    else:
+        # Convert any other objects to string representation
+        return str(data)
+
+
+def flatten_json_for_dataframe(data, parent_key='', sep='_'):
+    """Flatten nested JSON structure for better dataframe display."""
+    items = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.extend(flatten_json_for_dataframe(v, new_key, sep=sep).items())
+            elif isinstance(v, list):
+                # Convert lists to string representation
+                items.append((new_key, json.dumps(v, ensure_ascii=False, indent=2)))
+            else:
+                items.append((new_key, v))
+    return dict(items)
 
 
 def main():
@@ -229,6 +262,12 @@ def main():
                             # Process cleaned JSON to limit nesting to level 2 (for Response tab)
                             level2_json_cleaned = limit_json_nesting_to_level2(cleaned_json)
                             
+                            # Convert lists to strings for dataframe compatibility
+                            level2_json_cleaned = convert_lists_to_strings(level2_json_cleaned)
+                            
+                            # Flatten the JSON for better dataframe display
+                            flattened_data = flatten_json_for_dataframe(level2_json_cleaned)
+                            
                             # Show original JSON in expander
                             st.markdown("**Original JSON**")
                             st.json(json_data, expanded=False)
@@ -241,9 +280,15 @@ def main():
                             
                             with data_tab:
                                 try:
-                                    st.dataframe(level2_json_cleaned, row_height=100)
+                                    # Try to display as flattened dataframe first
+                                    if flattened_data:
+                                        st.dataframe(flattened_data, row_height=100)
+                                    else:
+                                        st.dataframe(level2_json_cleaned, row_height=100)
                                 except Exception as e:
                                     st.error(f"Cannot display as dataframe: {e}")
+                                    # Fallback: show as JSON
+                                    st.json(level2_json_cleaned)
                             
                             with references_tab:
                                 if reference_fields:

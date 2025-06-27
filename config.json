@@ -1,12 +1,12 @@
 {
   "prompt_variables": [
     {
-      "name": "customer_profile",
-      "label": "Customer Profile",
+      "name": "customer_data",
+      "label": "Customer Data",
       "type": "text",
-      "placeholder": "Enter a customer profile"
+      "placeholder": "Enter customer information from onboarding document"
     }
   ],
   "default_model": "gemini-2.5-pro",
-  "default_prompt_name": "gemini-customer-search"
+  "default_prompt_name": "customer-screening-assessment"
 }

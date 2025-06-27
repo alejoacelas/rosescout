@@ -30,6 +30,13 @@
       "description": "Calculate distance between two addresses",
       "enabled_by_default": true,
       "type": "custom"
+    },
+    {
+      "name": "screening_list_search",
+      "label": "Screening List Search",
+      "description": "Search consolidated screening lists for sanctioned entities and individuals",
+      "enabled_by_default": true,
+      "type": "custom"
     }
   ]
 }

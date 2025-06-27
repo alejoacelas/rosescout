@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Optional
 import streamlit as st
 
 from gemini_api import GeminiClient
-from tools import get_coordinates, calculate_distance, web_search
+from tools import get_coordinates, calculate_distance, web_search, screening_list_search
 
 from json_utils import (
     extract_json_from_response, 
@@ -44,7 +44,7 @@ class SearchManager:
     def add_request(self, prompt_variables: Dict[str, str], selected_tools: List[str] = None) -> str:
         # Use first prompt variable value for request ID, or fallback to uuid
         first_value = next(iter(prompt_variables.values()), "") if prompt_variables else ""
-        request_id = first_value[:10] + str(uuid.uuid4())[:6]
+        request_id = first_value[:15] + str(uuid.uuid4())[:6]
         request = SearchRequest(
             id=request_id,
             prompt_variables=prompt_variables.copy(),
@@ -89,7 +89,8 @@ class SearchManager:
             tool_mapping = {
                 'get_coordinates': get_coordinates,
                 'calculate_distance': calculate_distance,
-                'web_search': web_search
+                'web_search': web_search,
+                'screening_list_search': screening_list_search
             }
             
             # Build tools list
@@ -220,11 +221,7 @@ def main():
                     # Filter out empty values
                     filtered_variables = {k: v for k, v in prompt_variables.items() if v.strip()}
                     
-                    # Show selected tools summary
-                    if selected_tools:
-                        tool_names = [tool['label'] for tool in available_tools if tool['name'] in selected_tools]
-                        st.info(f"Selected tools: {', '.join(tool_names)}")
-                    else:
+                    if not selected_tools:
                         st.warning("No tools selected. The search will run without any tools.")
                     
                     request_id = search_manager.add_request(filtered_variables, selected_tools)

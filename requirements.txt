@@ -6,3 +6,4 @@ openai
 python-dotenv
 googlemaps
 httpx
+ipykernel

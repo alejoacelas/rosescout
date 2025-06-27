@@ -8,7 +8,7 @@ import os
 import logging
 from dotenv import load_dotenv
 
-from tools import get_coordinates, calculate_distance, web_search, GoogleMapsError, TavilySearchError
+from tools import get_coordinates, calculate_distance, web_search, screening_list_search, GoogleMapsError, TavilySearchError, ConsolidatedScreeningListError
 from gemini_api import GeminiClient, GeminiAPIError
 
 load_dotenv()
@@ -38,6 +38,33 @@ async def test_search_tool_independently():
                 print(f"   First result: {result['results'][0]['title']}")
         except TavilySearchError as e:
             print(f"❌ Query: {query}")
+            print(f"   Error: {e}")
+        print()
+
+
+async def test_screening_tool_independently():
+    """Test the Consolidated Screening List tool independently without Gemini integration."""
+    print("=" * 60)
+    print("TESTING CONSOLIDATED SCREENING LIST TOOL INDEPENDENTLY")
+    print("=" * 60)
+    
+    test_searches = [
+        {"name": "Sberbank", "description": "Search by company name"},
+    ]
+    
+    for search in test_searches:
+        try:
+            result = await screening_list_search(**{k: v for k, v in search.items() if k != "description"})
+            print(f"✅ {search['description']}")
+            print(f"   Total results: {result.get('total_returned', 0)}")
+            if result.get('results'):
+                first_result = result['results'][0]
+                print(f"   First result: {first_result.get('name', 'N/A')}")
+                if first_result.get('addresses'):
+                    addr = first_result['addresses'][0]
+                    print(f"   Location: {addr.get('city', 'N/A')}, {addr.get('country', 'N/A')}")
+        except ConsolidatedScreeningListError as e:
+            print(f"❌ {search['description']}")
             print(f"   Error: {e}")
         print()
 
@@ -121,6 +148,16 @@ async def test_gemini_with_maps_tools():
                 "prompt": "What is the weather like today and find the distance between London and Paris?",
                 "tools": [web_search, calculate_distance],
                 "description": "Combine Tavily search with Maps tools"
+            },
+            {
+                "prompt": "Search for companies named 'Huawei' in the consolidated screening list",
+                "tools": [screening_list_search],
+                "description": "Search screening list by company name"
+            },
+            {
+                "prompt": "Find companies in Beijing on the screening list and calculate distance from Beijing to Shanghai",
+                "tools": [screening_list_search, calculate_distance],
+                "description": "Combine screening list search with Maps tools"
             }
         ]
         
@@ -180,7 +217,7 @@ def check_environment():
     print("CHECKING ENVIRONMENT SETUP")
     print("=" * 60)
     
-    required_vars = ["GOOGLE_MAPS_API_KEY", "GEMINI_API_KEY", "TAVILY_SEARCH_API_KEY"]
+    required_vars = ["GOOGLE_MAPS_API_KEY", "GEMINI_API_KEY", "TAVILY_SEARCH_API_KEY", "CONSOLIDATED_SCREENING_LIST_API_KEY"]
     missing_vars = []
     
     for var in required_vars:
@@ -209,6 +246,9 @@ async def main():
     
     # Test search tool independently
     await test_search_tool_independently()
+    
+    # Test screening tool independently
+    await test_screening_tool_independently()
     
     # Test maps tools independently
     test_maps_tools_independently()

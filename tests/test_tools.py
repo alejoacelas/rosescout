@@ -8,8 +8,15 @@ import os
 import logging
 from dotenv import load_dotenv
 
-from tools import get_coordinates, calculate_distance, web_search, screening_list_search, GoogleMapsError, TavilySearchError, ConsolidatedScreeningListError
-from gemini_api import GeminiClient, GeminiAPIError
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+from rosescout.tools import get_coordinates, calculate_distance, web_search, screening_list_search
+from rosescout.tools.maps import GoogleMapsError
+from rosescout.tools.search import TavilySearchError
+from rosescout.tools.screening import ConsolidatedScreeningListError
+from rosescout.api import GeminiClient, GeminiAPIError
 
 load_dotenv()
 

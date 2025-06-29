@@ -191,17 +191,23 @@ class GeminiClient:
             raise GeminiAPIError("Either prompt or prompt_name must be provided")
         
         try:
-            # Get content text
-            if prompt_name:
-                # Get and compile prompt from Langfuse
-                langfuse_prompt = self._langfuse.get_prompt(prompt_name)
-                content_text = langfuse_prompt.compile(**(prompt_variables or {}))
-                self._langfuse.update_current_generation(prompt=langfuse_prompt)
-                prompt_identifier = f"prompt_name: {prompt_name}"
+            # Create manual test prompt if needed
+            if prompt:
+                prompt_name = "manual-test-prompt"
+                self._langfuse.create_prompt(
+                    name=prompt_name,
+                    type="text",
+                    prompt=prompt, 
+                    labels=["production"]
+                )
+                prompt_identifier = f"{prompt_name}: {prompt[:50]}{'...' if len(prompt) > 50 else ''}"
             else:
-                content_text = prompt
-                prompt_identifier = f"direct: {prompt[:50]}{'...' if len(prompt) > 50 else ''}"
-            
+                prompt_identifier = f"{prompt_name}"
+                
+            # Get and compile prompt
+            langfuse_prompt = self._langfuse.get_prompt(prompt_name)
+            content_text = langfuse_prompt.compile(**(prompt_variables or {}))
+            self._langfuse.update_current_generation(prompt=langfuse_prompt)
             # Log the Gemini call
             logger.info(f"🤖 Gemini call - Model: {model}, Prompt: {prompt_identifier}")
             

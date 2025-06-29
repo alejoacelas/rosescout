@@ -3,6 +3,7 @@ Streamlit app for Gemini API search interface with configurable prompt variables
 """
 import asyncio
 import json
+import logging
 import threading
 import uuid
 from dataclasses import dataclass
@@ -11,10 +12,9 @@ from typing import Dict, List, Any, Optional
 
 import streamlit as st
 
-from gemini_api import GeminiClient
-from tools import get_coordinates, calculate_distance, web_search, screening_list_search
-
-from json_utils import (
+from rosescout.api import GeminiClient
+from rosescout.tools import get_coordinates, calculate_distance, web_search, screening_list_search, get_researcher_profile
+from rosescout.utils import (
     extract_json_from_response, 
     limit_json_nesting_to_level2,
     extract_and_clean_json
@@ -30,6 +30,7 @@ class SearchRequest:
     selected_tools: List[str] = None
     result: Optional[str] = None
     error: Optional[str] = None
+    custom_prompt: Optional[str] = None
     
     def __post_init__(self):
         if self.selected_tools is None:
@@ -41,7 +42,7 @@ class SearchManager:
         self._lock = threading.Lock()
         self._requests = []
 
-    def add_request(self, prompt_variables: Dict[str, str], selected_tools: List[str] = None) -> str:
+    def add_request(self, prompt_variables: Dict[str, str], selected_tools: List[str] = None, custom_prompt: Optional[str] = None) -> str:
         # Use first prompt variable value for request ID, or fallback to uuid
         first_value = next(iter(prompt_variables.values()), "") if prompt_variables else ""
         request_id = first_value[:15] + str(uuid.uuid4())[:6]
@@ -50,7 +51,8 @@ class SearchManager:
             prompt_variables=prompt_variables.copy(),
             timestamp=datetime.now(),
             status='pending',
-            selected_tools=selected_tools or []
+            selected_tools=selected_tools or [],
+            custom_prompt=custom_prompt
         )
         
         with self._lock:
@@ -81,7 +83,7 @@ class SearchManager:
                         request.error = error
                     break
 
-    async def run_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str], selected_tools: List[str]):
+    async def run_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str], selected_tools: List[str], custom_prompt: Optional[str] = None):
         try:
             self.update_request_status(request_id, 'running')
             
@@ -90,7 +92,8 @@ class SearchManager:
                 'get_coordinates': get_coordinates,
                 'calculate_distance': calculate_distance,
                 'web_search': web_search,
-                'screening_list_search': screening_list_search
+                'screening_list_search': screening_list_search,
+                'get_researcher_profile': get_researcher_profile
             }
             
             # Build tools list
@@ -100,24 +103,32 @@ class SearchManager:
                     tools.append(tool_mapping[tool_name])
             
             client = GeminiClient()
-            result = await client.generate_content(
-                model=model,
-                prompt_name=prompt_name,
-                prompt_variables=prompt_variables,
-                tools=tools
-            )
+            if custom_prompt:
+                result = await client.generate_content(
+                    model=model,
+                    prompt=custom_prompt,
+                    prompt_variables=prompt_variables,
+                    tools=tools
+                )
+            else:
+                result = await client.generate_content(
+                    model=model,
+                    prompt_name=prompt_name,
+                    prompt_variables=prompt_variables,
+                    tools=tools
+                )
             
             self.update_request_status(request_id, 'completed', result=result)
             
         except Exception as e:
             self.update_request_status(request_id, 'error', error=str(e))
 
-    def start_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str], selected_tools: List[str]):
+    def start_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str], selected_tools: List[str], custom_prompt: Optional[str] = None):
         def run_async_search():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(self.run_search(request_id, model, prompt_name, prompt_variables, selected_tools))
+                loop.run_until_complete(self.run_search(request_id, model, prompt_name, prompt_variables, selected_tools, custom_prompt))
             finally:
                 loop.close()
 
@@ -134,10 +145,10 @@ def get_search_manager() -> SearchManager:
 
 def load_config() -> Dict[str, Any]:
     try:
-        with open('config.json', 'r') as f:
+        with open('config/config.json', 'r') as f:
             return json.load(f)
     except FileNotFoundError:
-        st.error("Config file not found. Please ensure config.json exists.")
+        st.error("Config file not found. Please ensure config/config.json exists.")
         st.stop()
     except json.JSONDecodeError:
         st.error("Invalid JSON in config file.")
@@ -145,6 +156,15 @@ def load_config() -> Dict[str, Any]:
 
 
 def main():
+    # Configure logging for Streamlit
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(message)s',
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
+    
     st.set_page_config(
         page_title="Gemini Search Interface",
         page_icon="🔍",
@@ -166,16 +186,27 @@ def main():
         with st.form("search_form"):
             prompt_variables = {}
             
-            for var_config in config['prompt_variables']:
-                label = var_config['label']
-                name = var_config['name']
-                placeholder = var_config.get('placeholder', f"Enter {label.lower()}")
+            for i, var_config in enumerate(config['prompt_variables']):
+                col1, col2 = st.columns([1, 3])
                 
-                prompt_variables[name] = st.text_area(
-                    label,
-                    placeholder=placeholder,
-                    key=f"input_{name}"
-                )
+                with col1:
+                    # Allow user to modify the key
+                    custom_key = st.text_input(
+                        "Variable Key",
+                        value=var_config['name'],
+                        key=f"key_{i}",
+                        help="Edit the variable name/key"
+                    )
+                
+                with col2:
+                    label = var_config['label']
+                    placeholder = var_config.get('placeholder', f"Enter {label.lower()}")
+                    
+                    prompt_variables[custom_key] = st.text_area(
+                        label,
+                        placeholder=placeholder,
+                        key=f"input_{i}"
+                    )
             
             # Tools selection
             st.subheader("🔧 Available Tools")
@@ -210,25 +241,31 @@ def main():
                     value=config.get('default_prompt_name', 'pombo-test-json-search'),
                     key="prompt_name_input"
                 )
+                custom_prompt = st.text_area(
+                    "Custom Prompt",
+                    placeholder="Enter a custom prompt to use instead of the Langfuse prompt. Leave empty to use the prompt name above.",
+                    key="custom_prompt_input",
+                    help="If filled, this will be used as the prompt instead of fetching from Langfuse."
+                )
             
             submitted = st.form_submit_button("Start Search")
             
             if submitted:
                 # Validate that at least one field is filled
                 if not any(prompt_variables.values()):
-                    st.error("Please fill in at least one field.")
-                else:
-                    # Filter out empty values
-                    filtered_variables = {k: v for k, v in prompt_variables.items() if v.strip()}
-                    
-                    if not selected_tools:
-                        st.warning("No tools selected. The search will run without any tools.")
-                    
-                    request_id = search_manager.add_request(filtered_variables, selected_tools)
-                    search_manager.start_search(request_id, model, prompt_name, filtered_variables, selected_tools)
-                    
-                    st.success(f"Search started! Request ID: {request_id}...")
-                    st.info("Check the Results tab to see progress.")
+                    st.warning("Prompt submited without any variables.")
+                
+                # Filter out empty values
+                filtered_variables = {k: v for k, v in prompt_variables.items() if v.strip()}
+                
+                if not selected_tools:
+                    st.warning("No tools selected. The search will run without any tools.")
+                
+                request_id = search_manager.add_request(filtered_variables, selected_tools=selected_tools, custom_prompt=custom_prompt if custom_prompt.strip() else None)
+                search_manager.start_search(request_id, model, prompt_name, filtered_variables, selected_tools, custom_prompt if custom_prompt.strip() else None)
+                
+                st.success(f"Search started! Request ID: {request_id}...")
+                st.info("Check the Results tab to see progress.")
 
     with results_tab:
         st.header("Search Results")

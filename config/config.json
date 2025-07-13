@@ -1,61 +1,12 @@
 {
   "prompt_variables": [
     {
-      "name": "location_1",
-      "label": "Location #1",
+      "name": "customer_data",
+      "label": "Customer Data",
       "type": "text",
-      "placeholder": "Enter a location"
-    },
-    {
-      "name": "location_2",
-      "label": "Location #2",
-      "type": "text",
-      "placeholder": "Enter a location"
-    },
-    {
-      "name": "field_3",
-      "label": "Field #3",
-      "type": "text",
-      "placeholder": "Enter a value"
+      "placeholder": "Enter customer information from onboarding document"
     }
   ],
-  "default_model": "gemini-2.5-flash",
-  "default_prompt_name": "test-location",
-  "available_tools": [
-    {
-      "name": "web_search",
-      "label": "Web Search",
-      "description": "Search the web using Tavily Search API",
-      "enabled_by_default": true,
-      "type": "custom"
-    },
-    {
-      "name": "get_coordinates",
-      "label": "Get Coordinates",
-      "description": "Get latitude/longitude for an address",
-      "enabled_by_default": true,
-      "type": "custom"
-    },
-    {
-      "name": "calculate_distance",
-      "label": "Calculate Distance",
-      "description": "Calculate distance between two addresses",
-      "enabled_by_default": true,
-      "type": "custom"
-    },
-    {
-      "name": "screening_list_search",
-      "label": "Screening List Search",
-      "description": "Search consolidated screening lists for sanctioned entities and individuals",
-      "enabled_by_default": true,
-      "type": "custom"
-    },
-    {
-      "name": "get_researcher_profile",
-      "label": "Get ORCID Profile",
-      "description": "Retrieve researcher profile from ORCID",
-      "enabled_by_default": true,
-      "type": "custom"
-    }
-  ]
+  "default_model": "gemini-2.5-pro",
+  "default_prompt_name": "customer-screening-assessment"
 }

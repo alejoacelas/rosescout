@@ -180,15 +180,15 @@ def main():
     )
     
     st.set_page_config(
-        page_title="RoseScout Chat",
-        page_icon="🌹",
+        page_title="AI Background Check Assistant",
+        page_icon="🔍",
         layout="wide"
     )
 
     config = load_config()
     search_manager = get_search_manager()
 
-    st.title("🌹 RoseScout Chat")
+    st.title("🔍 Automated Background Check")
 
     # Sidebar for tool selection and advanced settings
     with st.sidebar:
@@ -260,117 +260,163 @@ def main():
         st.session_state.messages = []
     if "conversation_id" not in st.session_state:
         st.session_state.conversation_id = None
+    if "pending_input" not in st.session_state:
+        st.session_state.pending_input = None
+    if "input_type" not in st.session_state:
+        st.session_state.input_type = "initial"
 
     # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Chat input
-    if customer_info := st.chat_input("Enter customer information..."):
+    # Input handling - text area for initial input, chat_input for follow-ups
+    if len(st.session_state.messages) == 0:
+        # Initial input - use text area
+        customer_info = st.text_area(
+            "Paste customer information here...",
+            height=150,
+            placeholder="Enter customer details for background check analysis",
+            key="initial_input"
+        )
+        
+        if st.button("Analyze", type="primary", disabled=not customer_info):
+            st.session_state.pending_input = customer_info
+            st.session_state.input_type = "initial"
+            st.rerun()
+    else:
+        # Follow-up input - use chat_input
+        if follow_up := st.chat_input("Ask additional questions..."):
+            st.session_state.pending_input = follow_up
+            st.session_state.input_type = "follow_up"
+            st.rerun()
+
+    # Process pending input
+    if st.session_state.pending_input:
+        user_input = st.session_state.pending_input
+        input_type = st.session_state.input_type
+        
+        # Clear pending input
+        st.session_state.pending_input = None
+        
         # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": customer_info})
+        st.session_state.messages.append({"role": "user", "content": user_input})
         
-        # Display user message
-        with st.chat_message("user"):
-            st.markdown(customer_info)
+        # Display user message if it's a follow-up
+        if input_type == "follow_up":
+            with st.chat_message("user"):
+                st.markdown(user_input)
         
-        # Add placeholder for assistant response
-        with st.chat_message("assistant"):
+        # Process the request
+        if input_type == "follow_up":
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+        else:
             message_placeholder = st.empty()
             
-            # Process the request
-            request_id = search_manager.add_request(
-                prompt_variables={"Customer Information": customer_info}, 
-                mcp_servers=selected_mcp_servers,
-                web_search=web_search_enabled
-            )
+        request_id = search_manager.add_request(
+            prompt_variables={"Customer Information" if input_type == "initial" else "Follow-up Question": user_input}, 
+            mcp_servers=selected_mcp_servers,
+            web_search=web_search_enabled
+        )
+        
+        # Run streaming search
+        try:
+            # Show initial thinking message
+            thinking_msg = "💭 Processing (this may take 30-60 seconds)" if input_type == "initial" else "💭 Processing..."
+            message_placeholder.markdown(thinking_msg)
             
-            # Run streaming search directly (no threading)
-            try:
-                # Show initial thinking message
-                message_placeholder.markdown("🤔 Processing...")
+            # Run the async function
+            full_response = ""
+            client = OpenAIClient()
+            
+            # Stream the response
+            async def stream_response():
+                nonlocal full_response
+                search_manager.update_request_status(request_id, 'running')
                 
-                # Run the async function
-                full_response = ""
-                client = OpenAIClient()
+                # Determine if we should use prompt_id or system_prompt
+                prompt_id = None if system_prompt.strip() else config.get('default_prompt_id')
+                actual_system_prompt = system_prompt.strip() if system_prompt.strip() else None
                 
-                # Stream the response
-                async def stream_response():
-                    nonlocal full_response
-                    search_manager.update_request_status(request_id, 'running')
+                async for delta in client.stream_content(
+                    model=model,
+                    system_prompt=actual_system_prompt,
+                    prompt_id=prompt_id,
+                    user_prompt=user_input,
+                    mcp_tools=selected_mcp_servers,
+                    web_search=web_search_enabled,
+                    previous_response_id=st.session_state.conversation_id
+                ):
+                    full_response += delta
+                    # Update the placeholder with current response
+                    message_placeholder.markdown(full_response + "▌")
+                    # Update partial result in request
+                    search_manager.update_request_status(request_id, 'streaming', partial_result=full_response)
+                
+                # Get complete response with annotations and tool calls
+                complete_response = client.get_last_streaming_response()
+                
+                # Store response ID for conversation continuity
+                if complete_response and complete_response.response_id:
+                    st.session_state.conversation_id = complete_response.response_id
+                
+                # Format final response with annotations and tool calls
+                final_response = full_response
+                
+                if complete_response:
+                    # Add annotations as hyperlinks
+                    if complete_response.annotations:
+                        final_response += "\n\n**Sources:**\n"
+                        # Track unique sources
+                        seen_sources = set()
+                        counter = 1
+                        for annotation in complete_response.annotations:
+                            if annotation.source:
+                                if annotation.source not in seen_sources:
+                                    final_response += f"{counter}. [{annotation.content}]({annotation.source})\n"
+                                    seen_sources.add(annotation.source)
+                                    counter += 1
+                            else:
+                                final_response += f"{counter}. {annotation.content}\n"
+                                counter += 1
                     
-                    # Determine if we should use prompt_id or system_prompt
-                    prompt_id = None if system_prompt.strip() else config.get('default_prompt_id')
-                    actual_system_prompt = system_prompt.strip() if system_prompt.strip() else None
-                    
-                    async for delta in client.stream_content(
-                        model=model,
-                        system_prompt=actual_system_prompt,
-                        prompt_id=prompt_id,
-                        user_prompt=customer_info,
-                        mcp_tools=selected_mcp_servers,
-                        web_search=web_search_enabled,
-                        previous_response_id=st.session_state.conversation_id
-                    ):
-                        full_response += delta
-                        # Update the placeholder with current response
-                        message_placeholder.markdown(full_response + "▌")
-                        # Update partial result in request
-                        search_manager.update_request_status(request_id, 'streaming', partial_result=full_response)
-                    
-                    # Get complete response with annotations and tool calls
-                    complete_response = client.get_last_streaming_response()
-                    
-                    # Store response ID for conversation continuity
-                    if complete_response and complete_response.response_id:
-                        st.session_state.conversation_id = complete_response.response_id
-                    
-                    # Format final response with annotations and tool calls
-                    final_response = full_response
-                    
-                    if complete_response:
-                        # Add annotations as hyperlinks
-                        if complete_response.annotations:
-                            final_response += "\n\n**Sources:**\n"
-                            for i, annotation in enumerate(complete_response.annotations, 1):
-                                if annotation.source:
-                                    final_response += f"{i}. [{annotation.content}]({annotation.source})\n"
-                                else:
-                                    final_response += f"{i}. {annotation.content}\n"
-                        
-                        # Add tool calls information
-                        if complete_response.tool_calls:
-                            final_response += "\n\n**Tools Used:**\n"
-                            for tool_call in complete_response.tool_calls:
+                    # Add tool calls information
+                    if complete_response.tool_calls:
+                        final_response += "\n\n**Tools Used:**\n"
+                        # Track unique tool names
+                        seen_tools = set()
+                        for tool_call in complete_response.tool_calls:
+                            if tool_call.name not in seen_tools:
                                 final_response += f"- {tool_call.name}\n"
+                                seen_tools.add(tool_call.name)
+                
+                # Final update without cursor
+                message_placeholder.markdown(final_response)
+                search_manager.update_request_status(request_id, 'completed', result=final_response)
+                
+                return final_response
+            
+            # Run the async function
+            result = asyncio.run(stream_response())
+            
+            # Add assistant response to chat history
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": result
+            })
+            
+        except Exception as e:
+            error_message = f"❌ Error: {str(e)}"
+            message_placeholder.error(error_message)
+            search_manager.update_request_status(request_id, 'error', error=str(e))
+            
+            # Add error to chat history
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": error_message
+            })
                     
-                    # Final update without cursor
-                    message_placeholder.markdown(final_response)
-                    search_manager.update_request_status(request_id, 'completed', result=final_response)
-                    
-                    return final_response
-                
-                # Run the async function
-                result = asyncio.run(stream_response())
-                
-                # Add assistant response to chat history
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": result
-                })
-                
-            except Exception as e:
-                error_message = f"❌ Error: {str(e)}"
-                message_placeholder.error(error_message)
-                search_manager.update_request_status(request_id, 'error', error=str(e))
-                
-                # Add error to chat history
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": error_message
-                })
-                        
         # Rerun to refresh the chat display
         st.rerun()
 

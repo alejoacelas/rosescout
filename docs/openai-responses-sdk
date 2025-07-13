@@ -1,0 +1,680 @@
+Introduction
+This API reference describes the RESTful, streaming, and realtime APIs you can use to interact with the OpenAI platform. REST APIs are usable via HTTP in any environment that supports HTTP requests. Language-specific SDKs are listed on the libraries page.
+
+Authentication
+The OpenAI API uses API keys for authentication. Create, manage, and learn more about API keys in your organization settings.
+
+Remember that your API key is a secret! Do not share it with others or expose it in any client-side code (browsers, apps). API keys should be securely loaded from an environment variable or key management service on the server.
+
+API keys should be provided via HTTP Bearer authentication.
+
+Authorization: Bearer OPENAI_API_KEY
+If you belong to multiple organizations or access projects through a legacy user API key, pass a header to specify which organization and project to use for an API request:
+
+curl https://api.openai.com/v1/models \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "OpenAI-Organization: org-4C3kL7Nn4thAvWH280Ar2gjL" \
+  -H "OpenAI-Project: $PROJECT_ID"
+Usage from these API requests counts as usage for the specified organization and project.Organization IDs can be found on your organization settings page. Project IDs can be found on your general settings page by selecting the specific project.
+
+Debugging requests
+In addition to error codes returned from API responses, you can inspect HTTP response headers containing the unique ID of a particular API request or information about rate limiting applied to your requests. Below is an incomplete list of HTTP headers returned with API responses:
+
+API meta information
+
+openai-organization: The organization associated with the request
+openai-processing-ms: Time taken processing your API request
+openai-version: REST API version used for this request (currently 2020-10-01)
+x-request-id: Unique identifier for this API request (used in troubleshooting)
+Rate limiting information
+
+x-ratelimit-limit-requests
+x-ratelimit-limit-tokens
+x-ratelimit-remaining-requests
+x-ratelimit-remaining-tokens
+x-ratelimit-reset-requests
+x-ratelimit-reset-tokens
+OpenAI recommends logging request IDs in production deployments for more efficient troubleshooting with our support team, should the need arise. Our official SDKs provide a property on top-level response objects containing the value of the x-request-id header.
+
+Backward compatibility
+OpenAI is committed to providing stability to API users by avoiding breaking changes in major API versions whenever reasonably possible. This includes:
+
+The REST API (currently v1)
+Our first-party SDKs (released SDKs adhere to semantic versioning)
+Model families (like gpt-4o or o4-mini)
+Model prompting behavior between snapshots is subject to change. Model outputs are by their nature variable, so expect changes in prompting and model behavior between snapshots. For example, if you moved from gpt-4o-2024-05-13 to gpt-4o-2024-08-06, the same system or user messages could function differently between versions. The best way to ensure consistent prompting behavior and model output is to use pinned model versions, and to implement evals for your applications.
+
+Backwards-compatible API changes:
+
+Adding new resources (URLs) to the REST API and SDKs
+Adding new optional API parameters
+Adding new properties to JSON response objects or event data
+Changing the order of properties in a JSON response object
+Changing the length or format of opaque strings, like resource identifiers and UUIDs
+Adding new event types (in either streaming or the Realtime API)
+See the changelog for a list of backwards-compatible changes and rare breaking changes.
+
+Responses
+OpenAI's most advanced interface for generating model responses. Supports text and image inputs, and text outputs. Create stateful interactions with the model, using the output of previous responses as input. Extend the model's capabilities with built-in tools for file search, web search, computer use, and more. Allow the model access to external systems and data using function calling.
+
+Related guides:
+
+Quickstart
+Text inputs and outputs
+Image inputs
+Structured Outputs
+Function calling
+Conversation state
+Extend the models with tools
+Create a model response
+post
+ 
+https://api.openai.com/v1/responses
+Creates a model response. Provide text or image inputs to generate text or JSON outputs. Have the model call your own custom code or use built-in tools like web search or file search to use your own data as input for the model's response.
+
+Request body
+background
+boolean or null
+
+Optional
+Defaults to false
+Whether to run the model response in the background. Learn more.
+
+include
+array or null
+
+Optional
+Specify additional output data to include in the model response. Currently supported values are:
+
+code_interpreter_call.outputs: Includes the outputs of python code execution in code interpreter tool call items.
+computer_call_output.output.image_url: Include image urls from the computer call output.
+file_search_call.results: Include the search results of the file search tool call.
+message.input_image.image_url: Include image urls from the input message.
+message.output_text.logprobs: Include logprobs with assistant messages.
+reasoning.encrypted_content: Includes an encrypted version of reasoning tokens in reasoning item outputs. This enables reasoning items to be used in multi-turn conversations when using the Responses API statelessly (like when the store parameter is set to false, or when an organization is enrolled in the zero data retention program).
+input
+string or array
+
+Optional
+Text, image, or file inputs to the model, used to generate a response.
+
+Learn more:
+
+Text inputs and outputs
+Image inputs
+File inputs
+Conversation state
+Function calling
+
+Show possible types
+instructions
+string or null
+
+Optional
+A system (or developer) message inserted into the model's context.
+
+When using along with previous_response_id, the instructions from a previous response will not be carried over to the next response. This makes it simple to swap out system (or developer) messages in new responses.
+
+max_output_tokens
+integer or null
+
+Optional
+An upper bound for the number of tokens that can be generated for a response, including visible output tokens and reasoning tokens.
+
+max_tool_calls
+integer or null
+
+Optional
+The maximum number of total calls to built-in tools that can be processed in a response. This maximum number applies across all built-in tool calls, not per individual tool. Any further attempts to call a tool by the model will be ignored.
+
+metadata
+map
+
+Optional
+Set of 16 key-value pairs that can be attached to an object. This can be useful for storing additional information about the object in a structured format, and querying for objects via API or the dashboard.
+
+Keys are strings with a maximum length of 64 characters. Values are strings with a maximum length of 512 characters.
+
+model
+string
+
+Optional
+Model ID used to generate the response, like gpt-4o or o3. OpenAI offers a wide range of models with different capabilities, performance characteristics, and price points. Refer to the model guide to browse and compare available models.
+
+parallel_tool_calls
+boolean or null
+
+Optional
+Defaults to true
+Whether to allow the model to run tool calls in parallel.
+
+previous_response_id
+string or null
+
+Optional
+The unique ID of the previous response to the model. Use this to create multi-turn conversations. Learn more about conversation state.
+
+prompt
+object or null
+
+Optional
+Reference to a prompt template and its variables. Learn more.
+
+
+Show properties
+reasoning
+object or null
+
+Optional
+o-series models only
+
+Configuration options for reasoning models.
+
+
+Show properties
+service_tier
+string or null
+
+Optional
+Defaults to auto
+Specifies the processing type used for serving the request.
+
+If set to 'auto', then the request will be processed with the service tier configured in the Project settings. Unless otherwise configured, the Project will use 'default'.
+If set to 'default', then the requset will be processed with the standard pricing and performance for the selected model.
+If set to 'flex' or 'priority', then the request will be processed with the corresponding service tier. Contact sales to learn more about Priority processing.
+When not set, the default behavior is 'auto'.
+When the service_tier parameter is set, the response body will include the service_tier value based on the processing mode actually used to serve the request. This response value may be different from the value set in the parameter.
+
+store
+boolean or null
+
+Optional
+Defaults to true
+Whether to store the generated model response for later retrieval via API.
+
+stream
+boolean or null
+
+Optional
+Defaults to false
+If set to true, the model response data will be streamed to the client as it is generated using server-sent events. See the Streaming section below for more information.
+
+temperature
+number or null
+
+Optional
+Defaults to 1
+What sampling temperature to use, between 0 and 2. Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. We generally recommend altering this or top_p but not both.
+
+text
+object
+
+Optional
+Configuration options for a text response from the model. Can be plain text or structured JSON data. Learn more:
+
+Text inputs and outputs
+Structured Outputs
+
+Show properties
+tool_choice
+string or object
+
+Optional
+How the model should select which tool (or tools) to use when generating a response. See the tools parameter to see how to specify which tools the model can call.
+
+
+Show possible types
+tools
+array
+
+Optional
+An array of tools the model may call while generating a response. You can specify which tool to use by setting the tool_choice parameter.
+
+The two categories of tools you can provide the model are:
+
+Built-in tools: Tools that are provided by OpenAI that extend the model's capabilities, like web search or file search. Learn more about built-in tools.
+Function calls (custom tools): Functions that are defined by you, enabling the model to call your own code. Learn more about function calling.
+
+Show possible types
+top_logprobs
+integer or null
+
+Optional
+An integer between 0 and 20 specifying the number of most likely tokens to return at each token position, each with an associated log probability.
+
+top_p
+number or null
+
+Optional
+Defaults to 1
+An alternative to sampling with temperature, called nucleus sampling, where the model considers the results of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered.
+
+We generally recommend altering this or temperature but not both.
+
+truncation
+string or null
+
+Optional
+Defaults to disabled
+The truncation strategy to use for the model response.
+
+auto: If the context of this response and previous ones exceeds the model's context window size, the model will truncate the response to fit the context window by dropping input items in the middle of the conversation.
+disabled (default): If a model response will exceed the context window size for a model, the request will fail with a 400 error.
+user
+string
+
+Optional
+A stable identifier for your end-users. Used to boost cache hit rates by better bucketing similar requests and to help OpenAI detect and prevent abuse. Learn more.
+
+Returns
+Returns a Response object.
+
+
+Text input
+
+Image input
+
+File input
+
+Web search
+
+File search
+
+Streaming
+
+Functions
+
+Reasoning
+Example request
+curl https://api.openai.com/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{
+    "model": "o3-mini",
+    "input": "How much wood would a woodchuck chuck?",
+    "reasoning": {
+      "effort": "high"
+    }
+  }'
+Response
+{
+  "id": "resp_67ccd7eca01881908ff0b5146584e408072912b2993db808",
+  "object": "response",
+  "created_at": 1741477868,
+  "status": "completed",
+  "error": null,
+  "incomplete_details": null,
+  "instructions": null,
+  "max_output_tokens": null,
+  "model": "o1-2024-12-17",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_67ccd7f7b5848190a6f3e95d809f6b44072912b2993db808",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "The classic tongue twister...",
+          "annotations": []
+        }
+      ]
+    }
+  ],
+  "parallel_tool_calls": true,
+  "previous_response_id": null,
+  "reasoning": {
+    "effort": "high",
+    "summary": null
+  },
+  "store": true,
+  "temperature": 1.0,
+  "text": {
+    "format": {
+      "type": "text"
+    }
+  },
+  "tool_choice": "auto",
+  "tools": [],
+  "top_p": 1.0,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 81,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 1035,
+    "output_tokens_details": {
+      "reasoning_tokens": 832
+    },
+    "total_tokens": 1116
+  },
+  "user": null,
+  "metadata": {}
+}
+Get a model response
+get
+ 
+https://api.openai.com/v1/responses/{response_id}
+Retrieves a model response with the given ID.
+
+Path parameters
+response_id
+string
+
+Required
+The ID of the response to retrieve.
+
+Query parameters
+include
+array
+
+Optional
+Additional fields to include in the response. See the include parameter for Response creation above for more information.
+
+starting_after
+integer
+
+Optional
+The sequence number of the event after which to start streaming.
+
+stream
+boolean
+
+Optional
+If set to true, the model response data will be streamed to the client as it is generated using server-sent events. See the Streaming section below for more information.
+
+Returns
+The Response object matching the specified ID.
+
+Example request
+curl https://api.openai.com/v1/responses/resp_123 \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $OPENAI_API_KEY"
+Response
+{
+  "id": "resp_67cb71b351908190a308f3859487620d06981a8637e6bc44",
+  "object": "response",
+  "created_at": 1741386163,
+  "status": "completed",
+  "error": null,
+  "incomplete_details": null,
+  "instructions": null,
+  "max_output_tokens": null,
+  "model": "gpt-4o-2024-08-06",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_67cb71b3c2b0819084d481baaaf148f206981a8637e6bc44",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Silent circuits hum,  \nThoughts emerge in data streams—  \nDigital dawn breaks.",
+          "annotations": []
+        }
+      ]
+    }
+  ],
+  "parallel_tool_calls": true,
+  "previous_response_id": null,
+  "reasoning": {
+    "effort": null,
+    "summary": null
+  },
+  "store": true,
+  "temperature": 1.0,
+  "text": {
+    "format": {
+      "type": "text"
+    }
+  },
+  "tool_choice": "auto",
+  "tools": [],
+  "top_p": 1.0,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 32,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 18,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 50
+  },
+  "user": null,
+  "metadata": {}
+}
+
+Function call:
+
+Web search
+
+File search
+
+Streaming
+
+Functions
+
+Reasoning
+Example request
+curl https://api.openai.com/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{
+    "model": "gpt-4.1",
+    "input": "What is the weather like in Boston today?",
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location", "unit"]
+        }
+      }
+    ],
+    "tool_choice": "auto"
+  }'
+Response
+{
+  "id": "resp_67ca09c5efe0819096d0511c92b8c890096610f474011cc0",
+  "object": "response",
+  "created_at": 1741294021,
+  "status": "completed",
+  "error": null,
+  "incomplete_details": null,
+  "instructions": null,
+  "max_output_tokens": null,
+  "model": "gpt-4.1-2025-04-14",
+  "output": [
+    {
+      "type": "function_call",
+      "id": "fc_67ca09c6bedc8190a7abfec07b1a1332096610f474011cc0",
+      "call_id": "call_unLAR8MvFNptuiZK6K6HCy5k",
+      "name": "get_current_weather",
+      "arguments": "{\"location\":\"Boston, MA\",\"unit\":\"celsius\"}",
+      "status": "completed"
+    }
+  ],
+  "parallel_tool_calls": true,
+  "previous_response_id": null,
+  "reasoning": {
+    "effort": null,
+    "summary": null
+  },
+  "store": true,
+  "temperature": 1.0,
+  "text": {
+    "format": {
+      "type": "text"
+    }
+  },
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "type": "function",
+      "description": "Get the current weather in a given location",
+      "name": "get_current_weather",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "celsius",
+              "fahrenheit"
+            ]
+          }
+        },
+        "required": [
+          "location",
+          "unit"
+        ]
+      },
+      "strict": true
+    }
+  ],
+  "top_p": 1.0,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 291,
+    "output_tokens": 23,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 314
+  },
+  "user": null,
+  "metadata": {}
+}
+
+
+Streaming:
+
+Web search
+
+File search
+
+Streaming
+
+Functions
+
+Reasoning
+Example request
+curl https://api.openai.com/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{
+    "model": "gpt-4.1",
+    "instructions": "You are a helpful assistant.",
+    "input": "Hello!",
+    "stream": true
+  }'
+Response
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_67c9fdcecf488190bdd9a0409de3a1ec07b8b0ad4e5eb654","object":"response","created_at":1741290958,"status":"in_progress","error":null,"incomplete_details":null,"instructions":"You are a helpful assistant.","max_output_tokens":null,"model":"gpt-4.1-2025-04-14","output":[],"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"store":true,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":null,"user":null,"metadata":{}}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_67c9fdcecf488190bdd9a0409de3a1ec07b8b0ad4e5eb654","object":"response","created_at":1741290958,"status":"in_progress","error":null,"incomplete_details":null,"instructions":"You are a helpful assistant.","max_output_tokens":null,"model":"gpt-4.1-2025-04-14","output":[],"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"store":true,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":null,"user":null,"metadata":{}}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","item_id":"msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654","output_index":0,"content_index":0,"delta":"Hi"}
+
+...
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","item_id":"msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654","output_index":0,"content_index":0,"text":"Hi there! How can I assist you today?"}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","item_id":"msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654","output_index":0,"content_index":0,"part":{"type":"output_text","text":"Hi there! How can I assist you today?","annotations":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hi there! How can I assist you today?","annotations":[]}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_67c9fdcecf488190bdd9a0409de3a1ec07b8b0ad4e5eb654","object":"response","created_at":1741290958,"status":"completed","error":null,"incomplete_details":null,"instructions":"You are a helpful assistant.","max_output_tokens":null,"model":"gpt-4.1-2025-04-14","output":[{"id":"msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hi there! How can I assist you today?","annotations":[]}]}],"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"store":true,"temperature":1.0,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":{"input_tokens":37,"output_tokens":11,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":48},"user":null,"metadata":{}}}
+
+Reasoning models:
+
+{
+  "id": "resp_67ccd7eca01881908ff0b5146584e408072912b2993db808",
+  "object": "response",
+  "created_at": 1741477868,
+  "status": "completed",
+  "error": null,
+  "incomplete_details": null,
+  "instructions": null,
+  "max_output_tokens": null,
+  "model": "o1-2024-12-17",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_67ccd7f7b5848190a6f3e95d809f6b44072912b2993db808",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "The classic tongue twister...",
+          "annotations": []
+        }
+      ]
+    }
+  ],
+  "parallel_tool_calls": true,
+  "previous_response_id": null,
+  "reasoning": {
+    "effort": "high",
+    "summary": null
+  },
+  "store": true,
+  "temperature": 1.0,
+  "text": {
+    "format": {
+      "type": "text"
+    }
+  },
+  "tool_choice": "auto",
+  "tools": [],
+  "top_p": 1.0,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 81,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 1035,
+    "output_tokens_details": {
+      "reasoning_tokens": 832
+    },
+    "total_tokens": 1116
+  },
+  "user": null,
+  "metadata": {}
+}

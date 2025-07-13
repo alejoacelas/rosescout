@@ -110,3 +110,31 @@ def limit_json_nesting_to_level2(json_data: Dict) -> Dict:
             result[key] = value
     
     return result
+
+def convert_lists_to_strings(data):
+    """Convert lists and complex objects in data to strings for dataframe compatibility."""
+    if isinstance(data, list):
+        return json.dumps(data, ensure_ascii=False, indent=2)
+    elif isinstance(data, dict):
+        return {k: convert_lists_to_strings(v) for k, v in data.items()}
+    elif isinstance(data, (int, float, str, bool)) or data is None:
+        return data
+    else:
+        # Convert any other objects to string representation
+        return str(data)
+
+
+def flatten_json_for_dataframe(data, parent_key='', sep='_'):
+    """Flatten nested JSON structure for better dataframe display."""
+    items = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.extend(flatten_json_for_dataframe(v, new_key, sep=sep).items())
+            elif isinstance(v, list):
+                # Convert lists to string representation
+                items.append((new_key, json.dumps(v, ensure_ascii=False, indent=2)))
+            else:
+                items.append((new_key, v))
+    return dict(items)

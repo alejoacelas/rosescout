@@ -16,13 +16,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-from rosescout.api import GeminiClient
-from rosescout.tools import get_coordinates, calculate_distance, web_search, screening_list_search, get_researcher_profile
-from rosescout.utils import (
-    extract_json_from_response, 
-    limit_json_nesting_to_level2,
-    extract_and_clean_json
-)
+from rosescout.api.gpt import OpenAIClient, MCPTool
 
 
 @dataclass
@@ -30,15 +24,17 @@ class SearchRequest:
     id: str
     prompt_variables: Dict[str, str]
     timestamp: datetime
-    status: str  # 'pending', 'running', 'completed', 'error'
-    selected_tools: List[str] = None
+    status: str  # 'pending', 'running', 'streaming', 'completed', 'error'
+    mcp_servers: List[MCPTool] = None
+    web_search: bool = False
     result: Optional[str] = None
     error: Optional[str] = None
     custom_prompt: Optional[str] = None
+    partial_result: Optional[str] = None  # For streaming responses
     
     def __post_init__(self):
-        if self.selected_tools is None:
-            self.selected_tools = []
+        if self.mcp_servers is None:
+            self.mcp_servers = []
 
 
 class SearchManager:
@@ -46,7 +42,7 @@ class SearchManager:
         self._lock = threading.Lock()
         self._requests = []
 
-    def add_request(self, prompt_variables: Dict[str, str], selected_tools: List[str] = None, custom_prompt: Optional[str] = None) -> str:
+    def add_request(self, prompt_variables: Dict[str, str], mcp_servers: List[MCPTool] = None, web_search: bool = False, custom_prompt: Optional[str] = None) -> str:
         # Use first prompt variable value for request ID, or fallback to uuid
         first_value = next(iter(prompt_variables.values()), "") if prompt_variables else ""
         request_id = first_value[:15] + str(uuid.uuid4())[:6]
@@ -55,7 +51,8 @@ class SearchManager:
             prompt_variables=prompt_variables.copy(),
             timestamp=datetime.now(),
             status='pending',
-            selected_tools=selected_tools or [],
+            mcp_servers=mcp_servers or [],
+            web_search=web_search,
             custom_prompt=custom_prompt
         )
         
@@ -76,7 +73,7 @@ class SearchManager:
         with self._lock:
             return sorted(self._requests, key=lambda x: x.timestamp, reverse=True)
 
-    def update_request_status(self, request_id: str, status: str, result: str = None, error: str = None):
+    def update_request_status(self, request_id: str, status: str, result: str = None, error: str = None, partial_result: str = None):
         with self._lock:
             for request in self._requests:
                 if request.id == request_id:
@@ -85,60 +82,57 @@ class SearchManager:
                         request.result = result
                     if error:
                         request.error = error
+                    if partial_result is not None:
+                        request.partial_result = partial_result
                     break
 
-    async def run_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str], selected_tools: List[str], custom_prompt: Optional[str] = None):
+    async def run_search_streaming(self, request_id: str, model: str, system_prompt: str, user_prompt: str, mcp_servers: List[MCPTool], web_search: bool):
+        """Run streaming search using OpenAI client."""
         try:
             self.update_request_status(request_id, 'running')
             
-            # Map tool names to actual functions
-            tool_mapping = {
-                'get_coordinates': get_coordinates,
-                'calculate_distance': calculate_distance,
-                'web_search': web_search,
-                'screening_list_search': screening_list_search,
-                'get_researcher_profile': get_researcher_profile
-            }
+            client = OpenAIClient()
             
-            # Build tools list
-            tools = []
-            for tool_name in selected_tools:
-                if tool_name in tool_mapping:
-                    tools.append(tool_mapping[tool_name])
+            # Stream the response
+            full_response = ""
+            async for delta in client.stream_content(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                mcp_tools=mcp_servers,
+                web_search=web_search
+            ):
+                full_response += delta
+                # Update partial result in request
+                self.update_request_status(request_id, 'streaming', partial_result=full_response)
             
-            client = GeminiClient()
-            if custom_prompt:
-                result = await client.generate_content(
-                    model=model,
-                    prompt=custom_prompt,
-                    prompt_variables=prompt_variables,
-                    tools=tools
-                )
-            else:
-                result = await client.generate_content(
-                    model=model,
-                    prompt_name=prompt_name,
-                    prompt_variables=prompt_variables,
-                    tools=tools
-                )
+            # Get complete response with annotations and tool calls
+            complete_response = client.get_last_streaming_response()
             
-            self.update_request_status(request_id, 'completed', result=result)
+            # Format final response with annotations and tool calls
+            final_response = full_response
+            
+            if complete_response:
+                # Add annotations as hyperlinks
+                if complete_response.annotations:
+                    final_response += "\n\n**Sources:**\n"
+                    for i, annotation in enumerate(complete_response.annotations, 1):
+                        if annotation.source:
+                            final_response += f"{i}. [{annotation.content}]({annotation.source})\n"
+                        else:
+                            final_response += f"{i}. {annotation.content}\n"
+                
+                # Add tool calls information
+                if complete_response.tool_calls:
+                    final_response += "\n\n**Tools Used:**\n"
+                    for tool_call in complete_response.tool_calls:
+                        final_response += f"- {tool_call.name}\n"
+            
+            self.update_request_status(request_id, 'completed', result=final_response)
             
         except Exception as e:
             self.update_request_status(request_id, 'error', error=str(e))
 
-    def start_search(self, request_id: str, model: str, prompt_name: str, prompt_variables: Dict[str, str], selected_tools: List[str], custom_prompt: Optional[str] = None):
-        def run_async_search():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self.run_search(request_id, model, prompt_name, prompt_variables, selected_tools, custom_prompt))
-            finally:
-                loop.close()
-
-        thread = threading.Thread(target=run_async_search)
-        thread.daemon = True
-        thread.start()
 
 
 @st.cache_resource
@@ -159,33 +153,20 @@ def load_config() -> Dict[str, Any]:
         st.stop()
 
 
-def convert_lists_to_strings(data):
-    """Convert lists and complex objects in data to strings for dataframe compatibility."""
-    if isinstance(data, list):
-        return json.dumps(data, ensure_ascii=False, indent=2)
-    elif isinstance(data, dict):
-        return {k: convert_lists_to_strings(v) for k, v in data.items()}
-    elif isinstance(data, (int, float, str, bool)) or data is None:
-        return data
-    else:
-        # Convert any other objects to string representation
-        return str(data)
-
-
-def flatten_json_for_dataframe(data, parent_key='', sep='_'):
-    """Flatten nested JSON structure for better dataframe display."""
-    items = []
-    if isinstance(data, dict):
-        for k, v in data.items():
-            new_key = f"{parent_key}{sep}{k}" if parent_key else k
-            if isinstance(v, dict):
-                items.extend(flatten_json_for_dataframe(v, new_key, sep=sep).items())
-            elif isinstance(v, list):
-                # Convert lists to string representation
-                items.append((new_key, json.dumps(v, ensure_ascii=False, indent=2)))
-            else:
-                items.append((new_key, v))
-    return dict(items)
+def load_mcp_servers_from_config(config: Dict[str, Any]) -> List[MCPTool]:
+    """Load MCP server configurations from config."""
+    mcp_servers = []
+    
+    # Check for MCP servers in config
+    mcp_config = config.get('mcp_servers', [])
+    for server_config in mcp_config:
+        mcp_servers.append(MCPTool(
+            server_label=server_config['label'],
+            server_url=server_config['url'],
+            require_approval=server_config.get('require_approval', 'never')
+        ))
+    
+    return mcp_servers
 
 
 def main():
@@ -199,220 +180,199 @@ def main():
     )
     
     st.set_page_config(
-        page_title="Gemini Search Interface",
-        page_icon="🔍",
+        page_title="RoseScout Chat",
+        page_icon="🌹",
         layout="wide"
     )
 
     config = load_config()
     search_manager = get_search_manager()
 
-    st.title("🔍 Gemini Search Interface")
+    st.title("🌹 RoseScout Chat")
 
-    # Create tabs
-    input_tab, results_tab = st.tabs(["Search Input", "Results"])
-
-    with input_tab:
-        st.header("Search Parameters")
+    # Sidebar for tool selection and advanced settings
+    with st.sidebar:
+        st.header("🔧 Tools & Settings")
         
-        # Create form for prompt variables
-        with st.form("search_form"):
-            prompt_variables = {}
-            
-            for i, var_config in enumerate(config['prompt_variables']):
-                col1, col2 = st.columns([1, 3])
-                
-                with col1:
-                    # Allow user to modify the key
-                    custom_key = st.text_input(
-                        "Variable Key",
-                        value=var_config['name'],
-                        key=f"key_{i}",
-                        help="Edit the variable name/key"
-                    )
-                
-                with col2:
-                    label = var_config['label']
-                    placeholder = var_config.get('placeholder', f"Enter {label.lower()}")
-                    
-                    prompt_variables[custom_key] = st.text_area(
-                        label,
-                        placeholder=placeholder,
-                        key=f"input_{i}"
-                    )
-            
-            # Tools selection
-            st.subheader("🔧 Available Tools")
-            st.caption("Select which tools Gemini can use for this search:")
-            
-            selected_tools = []
-            available_tools = config.get('available_tools', [])
-            
-            # Create checkboxes for each available tool
-            cols = st.columns(2)
-            for i, tool in enumerate(available_tools):
-                col = cols[i % 2]
-                with col:
-                    is_checked = tool.get('enabled_by_default', True)
-                    if st.checkbox(
-                        f"{tool['label']}",
-                        value=is_checked,
-                        help=tool.get('description', ''),
-                        key=f"tool_{tool['name']}"
-                    ):
-                        selected_tools.append(tool['name'])
-            
-            # Advanced settings
-            with st.expander("Advanced Settings"):
-                model = st.text_input(
-                    "Model",
-                    value=config.get('default_model', 'gemini-2.5-flash'),
-                    key="model_input"
-                )
-                prompt_name = st.text_input(
-                    "Prompt Name",
-                    value=config.get('default_prompt_name', 'pombo-test-json-search'),
-                    key="prompt_name_input"
-                )
-                custom_prompt = st.text_area(
-                    "Custom Prompt",
-                    placeholder="Enter a custom prompt to use instead of the Langfuse prompt. Leave empty to use the prompt name above.",
-                    key="custom_prompt_input",
-                    help="If filled, this will be used as the prompt instead of fetching from Langfuse."
-                )
-            
-            submitted = st.form_submit_button("Start Search")
-            
-            if submitted:
-                # Validate that at least one field is filled
-                if not any(prompt_variables.values()):
-                    st.warning("Prompt submited without any variables.")
-                
-                # Filter out empty values
-                filtered_variables = {k: v for k, v in prompt_variables.items() if v.strip()}
-                
-                if not selected_tools:
-                    st.warning("No tools selected. The search will run without any tools.")
-                
-                request_id = search_manager.add_request(filtered_variables, selected_tools=selected_tools, custom_prompt=custom_prompt if custom_prompt.strip() else None)
-                search_manager.start_search(request_id, model, prompt_name, filtered_variables, selected_tools, custom_prompt if custom_prompt.strip() else None)
-                
-                st.success(f"Search started! Request ID: {request_id}...")
-                st.info("Check the Results tab to see progress.")
-
-    with results_tab:
-        st.header("Search Results")
-        
-        if st.button("🔄 Refresh Results", use_container_width=True):
+        # Start new query button
+        if st.button("🆕 Start New Query", use_container_width=True):
+            st.session_state.messages = []
+            st.session_state.conversation_id = None
             st.rerun()
         
-        # Get all requests from the singleton search manager
-        requests = search_manager.get_all_requests()
+        st.divider()
         
-        if not requests:
-            st.info("No searches yet. Go to the Search Input tab to start a search.")
-        else:
-            for request in requests:
-                with st.container():
-                    # Status indicator
-                    status_colors = {
-                        'pending': '🔄',
-                        'running': '⏳',
-                        'completed': '✅',
-                        'error': '❌'
-                    }
+        # MCP servers and web search selection
+        st.subheader("Available Tools")
+        
+        # Load MCP servers from config
+        available_mcp_servers = load_mcp_servers_from_config(config)
+        selected_mcp_servers = []
+        
+        # MCP servers checkboxes
+        if available_mcp_servers:
+            st.write("**MCP Servers:**")
+            for server_config in config.get('mcp_servers', []):
+                server = next((s for s in available_mcp_servers if s.server_label == server_config['label']), None)
+                if server:
+                    if st.checkbox(
+                        f"{server.server_label}",
+                        value=server_config.get('enabled_by_default', True),
+                        help=server_config.get('description', f"Server URL: {server.server_url}"),
+                        key=f"mcp_{server.server_label}"
+                    ):
+                        selected_mcp_servers.append(server)
+        
+        # Web search option
+        web_search_enabled = st.checkbox(
+            "Web Search",
+            value=config.get('default_web_search_enabled', True),
+            help="Enable web search functionality",
+            key="web_search_enabled"
+        )
+        
+        # Advanced settings
+        st.subheader("Advanced Settings")
+        
+        # Model selection dropdown
+        model_options = config.get('model_options', ['gpt-4.1'])
+        default_model = config.get('default_model', 'gpt-4.1')
+        default_index = model_options.index(default_model) if default_model in model_options else 0
+        
+        model = st.selectbox(
+            "Model",
+            options=model_options,
+            index=default_index,
+            key="model_select"
+        )
+        
+        # System prompt (optional - if empty, uses default_prompt_id)
+        system_prompt = st.text_area(
+            "System Prompt (Optional)",
+            value="",
+            placeholder="Override the default instructions",
+            key="system_prompt_input",
+            help="If empty, the default prompt ID from config will be used. If provided, this custom prompt will override the default."
+        )
+
+    # Initialize session state for chat messages and conversation
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "conversation_id" not in st.session_state:
+        st.session_state.conversation_id = None
+
+    # Display chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Chat input
+    if customer_info := st.chat_input("Enter customer information..."):
+        # Add user message to chat history
+        st.session_state.messages.append({"role": "user", "content": customer_info})
+        
+        # Display user message
+        with st.chat_message("user"):
+            st.markdown(customer_info)
+        
+        # Add placeholder for assistant response
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            
+            # Process the request
+            request_id = search_manager.add_request(
+                prompt_variables={"Customer Information": customer_info}, 
+                mcp_servers=selected_mcp_servers,
+                web_search=web_search_enabled
+            )
+            
+            # Run streaming search directly (no threading)
+            try:
+                # Show initial thinking message
+                message_placeholder.markdown("🤔 Processing...")
+                
+                # Run the async function
+                full_response = ""
+                client = OpenAIClient()
+                
+                # Stream the response
+                async def stream_response():
+                    nonlocal full_response
+                    search_manager.update_request_status(request_id, 'running')
                     
-                    status_icon = status_colors.get(request.status, '❓')
+                    # Determine if we should use prompt_id or system_prompt
+                    prompt_id = None if system_prompt.strip() else config.get('default_prompt_id')
+                    actual_system_prompt = system_prompt.strip() if system_prompt.strip() else None
                     
-                    st.subheader(f"{status_icon} {request.id[:15]} - {request.status.title()}")
-                    st.caption(f"Started: {request.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                    async for delta in client.stream_content(
+                        model=model,
+                        system_prompt=actual_system_prompt,
+                        prompt_id=prompt_id,
+                        user_prompt=customer_info,
+                        mcp_tools=selected_mcp_servers,
+                        web_search=web_search_enabled,
+                        previous_response_id=st.session_state.conversation_id
+                    ):
+                        full_response += delta
+                        # Update the placeholder with current response
+                        message_placeholder.markdown(full_response + "▌")
+                        # Update partial result in request
+                        search_manager.update_request_status(request_id, 'streaming', partial_result=full_response)
                     
-                    # Show prompt variables
-                    parameters_toggle = st.expander("Input Parameters:", expanded=True)
-                    for key, value in request.prompt_variables.items():
-                        parameters_toggle.markdown(f"**{key.upper()}**")
-                        parameters_toggle.markdown(f"{value}".replace("\n", "\n\n"))
+                    # Get complete response with annotations and tool calls
+                    complete_response = client.get_last_streaming_response()
                     
-                    # Show selected tools
-                    if request.selected_tools:
-                        available_tools = config.get('available_tools', [])
-                        tool_labels = [tool['label'] for tool in available_tools if tool['name'] in request.selected_tools]
-                        parameters_toggle.markdown(f"**SELECTED TOOLS:** {', '.join(tool_labels)}")
-                    else:
-                        parameters_toggle.markdown("**SELECTED TOOLS:** None")
+                    # Store response ID for conversation continuity
+                    if complete_response and complete_response.response_id:
+                        st.session_state.conversation_id = complete_response.response_id
                     
-                    if request.status == 'completed' and request.result:
-                        # Extract JSON and display results
-                        json_data, raw_json = extract_json_from_response(request.result)
-                        
-                        # JSON display
-                        if json_data:
-                            st.markdown("### Response:")
-                            
-                            # Extract references and clean JSON for separate display
-                            cleaned_json, reference_fields = extract_and_clean_json(json_data)
-                            
-                            # Process cleaned JSON to limit nesting to level 2 (for Response tab)
-                            level2_json_cleaned = limit_json_nesting_to_level2(cleaned_json)
-                            
-                            # Convert lists to strings for dataframe compatibility
-                            level2_json_cleaned = convert_lists_to_strings(level2_json_cleaned)
-                            
-                            # Flatten the JSON for better dataframe display
-                            flattened_data = flatten_json_for_dataframe(level2_json_cleaned)
-                            
-                            # Show original JSON in expander
-                            st.markdown("**Original JSON**")
-                            st.json(json_data, expanded=False)
-                            
-                            # Create tabs for different views
-                            data_tab, references_tab = st.tabs([
-                                "Response", 
-                                "References", 
-                            ])
-                            
-                            with data_tab:
-                                try:
-                                    # Try to display as flattened dataframe first
-                                    if flattened_data:
-                                        st.dataframe(flattened_data, row_height=100)
-                                    else:
-                                        st.dataframe(level2_json_cleaned, row_height=100)
-                                except Exception as e:
-                                    st.error(f"Cannot display as dataframe: {e}")
-                                    # Fallback: show as JSON
-                                    st.json(level2_json_cleaned)
-                            
-                            with references_tab:
-                                if reference_fields:
-                                    st.dataframe(
-                                        reference_fields,
-                                        column_config={
-                                            "path": "Field Path",
-                                            "source": "Source",
-                                            "url": st.column_config.LinkColumn(
-                                                "URL",
-                                                display_text="🔗 Open Link",
-                                                width="small"
-                                            )
-                                        },
-                                        hide_index=True,
-                                        row_height=100
-                                    )
+                    # Format final response with annotations and tool calls
+                    final_response = full_response
+                    
+                    if complete_response:
+                        # Add annotations as hyperlinks
+                        if complete_response.annotations:
+                            final_response += "\n\n**Sources:**\n"
+                            for i, annotation in enumerate(complete_response.annotations, 1):
+                                if annotation.source:
+                                    final_response += f"{i}. [{annotation.content}]({annotation.source})\n"
                                 else:
-                                    st.info("No 'reference' fields found in the response.")
-                        else:
-                            st.warning("Could not parse JSON from response")
-                            with st.expander("Raw JSON Extract"):
-                                st.text(raw_json)
+                                    final_response += f"{i}. {annotation.content}\n"
+                        
+                        # Add tool calls information
+                        if complete_response.tool_calls:
+                            final_response += "\n\n**Tools Used:**\n"
+                            for tool_call in complete_response.tool_calls:
+                                final_response += f"- {tool_call.name}\n"
                     
-                    elif request.status == 'error':
-                        st.error(f"Error: {request.error}")
+                    # Final update without cursor
+                    message_placeholder.markdown(final_response)
+                    search_manager.update_request_status(request_id, 'completed', result=final_response)
                     
-                    elif request.status in ['pending', 'running']:
-                        st.info("Search in progress...")
-                    
-                    st.divider()
+                    return final_response
+                
+                # Run the async function
+                result = asyncio.run(stream_response())
+                
+                # Add assistant response to chat history
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": result
+                })
+                
+            except Exception as e:
+                error_message = f"❌ Error: {str(e)}"
+                message_placeholder.error(error_message)
+                search_manager.update_request_status(request_id, 'error', error=str(e))
+                
+                # Add error to chat history
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": error_message
+                })
+                        
+        # Rerun to refresh the chat display
+        st.rerun()
 
 
 if __name__ == "__main__":

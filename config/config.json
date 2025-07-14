@@ -8,8 +8,8 @@
     }
   ],
   "default_prompt_id": "pmpt_687166c010808196af655c613883ca550164c6caa7ca0002",
-  "default_model": "o4-mini",
-  "model_options": ["o4-mini", "o3"],
+  "default_model": "o3",
+  "model_options": ["o3", "o4-mini"],
   "default_web_search_enabled": true,
   "mcp_servers": [
     {

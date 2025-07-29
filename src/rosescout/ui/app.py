@@ -25,16 +25,11 @@ class SearchRequest:
     prompt_variables: Dict[str, str]
     timestamp: datetime
     status: str  # 'pending', 'running', 'streaming', 'completed', 'error'
-    mcp_servers: List[MCPTool] = None
     web_search: bool = False
     result: Optional[str] = None
     error: Optional[str] = None
     custom_prompt: Optional[str] = None
     partial_result: Optional[str] = None  # For streaming responses
-    
-    def __post_init__(self):
-        if self.mcp_servers is None:
-            self.mcp_servers = []
 
 
 class SearchManager:
@@ -42,7 +37,7 @@ class SearchManager:
         self._lock = threading.Lock()
         self._requests = []
 
-    def add_request(self, prompt_variables: Dict[str, str], mcp_servers: List[MCPTool] = None, web_search: bool = False, custom_prompt: Optional[str] = None) -> str:
+    def add_request(self, prompt_variables: Dict[str, str], web_search: bool = False, custom_prompt: Optional[str] = None) -> str:
         # Use first prompt variable value for request ID, or fallback to uuid
         first_value = next(iter(prompt_variables.values()), "") if prompt_variables else ""
         request_id = first_value[:15] + str(uuid.uuid4())[:6]
@@ -51,7 +46,6 @@ class SearchManager:
             prompt_variables=prompt_variables.copy(),
             timestamp=datetime.now(),
             status='pending',
-            mcp_servers=mcp_servers or [],
             web_search=web_search,
             custom_prompt=custom_prompt
         )
@@ -86,52 +80,6 @@ class SearchManager:
                         request.partial_result = partial_result
                     break
 
-    async def run_search_streaming(self, request_id: str, model: str, system_prompt: str, user_prompt: str, mcp_servers: List[MCPTool], web_search: bool):
-        """Run streaming search using OpenAI client."""
-        try:
-            self.update_request_status(request_id, 'running')
-            
-            client = OpenAIClient()
-            
-            # Stream the response
-            full_response = ""
-            async for delta in client.stream_content(
-                model=model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                mcp_tools=mcp_servers,
-                web_search=web_search
-            ):
-                full_response += delta
-                # Update partial result in request
-                self.update_request_status(request_id, 'streaming', partial_result=full_response)
-            
-            # Get complete response with annotations and tool calls
-            complete_response = client.get_last_streaming_response()
-            
-            # Format final response with annotations and tool calls
-            final_response = full_response
-            
-            if complete_response:
-                # Add annotations as hyperlinks
-                if complete_response.annotations:
-                    final_response += "\n\n**Sources:**\n"
-                    for i, annotation in enumerate(complete_response.annotations, 1):
-                        if annotation.source:
-                            final_response += f"{i}. [{annotation.content}]({annotation.source})\n"
-                        else:
-                            final_response += f"{i}. {annotation.content}\n"
-                
-                # Add tool calls information
-                if complete_response.tool_calls:
-                    final_response += "\n\n**Tools Used:**\n"
-                    for tool_call in complete_response.tool_calls:
-                        final_response += f"- {tool_call.name}\n"
-            
-            self.update_request_status(request_id, 'completed', result=final_response)
-            
-        except Exception as e:
-            self.update_request_status(request_id, 'error', error=str(e))
 
 
 
@@ -153,20 +101,6 @@ def load_config() -> Dict[str, Any]:
         st.stop()
 
 
-def load_mcp_servers_from_config(config: Dict[str, Any]) -> List[MCPTool]:
-    """Load MCP server configurations from config."""
-    mcp_servers = []
-    
-    # Check for MCP servers in config
-    mcp_config = config.get('mcp_servers', [])
-    for server_config in mcp_config:
-        mcp_servers.append(MCPTool(
-            server_label=server_config['label'],
-            server_url=server_config['url'],
-            require_approval=server_config.get('require_approval', 'never')
-        ))
-    
-    return mcp_servers
 
 
 def main():
@@ -202,32 +136,28 @@ def main():
         
         st.divider()
         
-        # MCP servers and web search selection
+        # Tool group selection
         st.subheader("Available Tools")
         
-        # Load MCP servers from config
-        available_mcp_servers = load_mcp_servers_from_config(config)
-        selected_mcp_servers = []
+        # Tool group selection
+        tool_groups = config.get('mcp_tools_available', [])
+        selected_tool_groups = []
         
-        # MCP servers checkboxes
-        if available_mcp_servers:
-            st.write("**MCP Servers:**")
-            for server_config in config.get('mcp_servers', []):
-                server = next((s for s in available_mcp_servers if s.server_label == server_config['label']), None)
-                if server:
-                    if st.checkbox(
-                        f"{server.server_label}",
-                        value=server_config.get('enabled_by_default', True),
-                        help=server_config.get('description', f"Server URL: {server.server_url}"),
-                        key=f"mcp_{server.server_label}"
-                    ):
-                        selected_mcp_servers.append(server)
+        if tool_groups:
+            for tool_group in tool_groups:
+                if st.checkbox(
+                    tool_group['label'],
+                    value=True,  # Default to enabled
+                    help=tool_group.get('description', ''),
+                    key=f"tool_group_{tool_group['label']}"
+                ):
+                    selected_tool_groups.append(tool_group)
         
         # Web search option
         web_search_enabled = st.checkbox(
             "Web Search",
             value=config.get('default_web_search_enabled', True),
-            help="Enable web search functionality",
+            help="Search public sources for customer information",
             key="web_search_enabled"
         )
         
@@ -280,7 +210,7 @@ def main():
             key="initial_input"
         )
         
-        if st.button("Analyze", type="primary", disabled=not customer_info):
+        if st.button("Analyze", type="primary"):
             st.session_state.pending_input = customer_info
             st.session_state.input_type = "initial"
             st.rerun()
@@ -307,6 +237,32 @@ def main():
             with st.chat_message("user"):
                 st.markdown(user_input)
         
+        # Build allowed tools list from selected tool groups
+        allowed_tools = []
+        for tool_group in selected_tool_groups:
+            allowed_tools.extend(tool_group.get('tools', []))
+        
+        # Add web search to recommended tools if enabled
+        if web_search_enabled:
+            allowed_tools.append("web_search")
+        
+        # Prepend RECOMMENDED TOOLS to user input if tools are selected
+        processed_user_input = user_input
+        if allowed_tools:
+            tools_list = ", ".join(allowed_tools)
+            processed_user_input = f"RECOMMENDED TOOLS: [{tools_list}]\n{user_input}"
+        
+        # Create MCP tools from config
+        mcp_tools = []
+        mcp_servers = config.get('mcp_servers', [])
+        for server in mcp_servers:
+            if server.get('enabled_by_default', True):
+                mcp_tools.append(MCPTool(
+                    server_label=server['label'],
+                    server_url=server['url'],
+                    require_approval=server.get('require_approval', 'never')
+                ))
+        
         # Process the request
         if input_type == "follow_up":
             with st.chat_message("assistant"):
@@ -315,8 +271,7 @@ def main():
             message_placeholder = st.empty()
             
         request_id = search_manager.add_request(
-            prompt_variables={"Customer Information" if input_type == "initial" else "Follow-up Question": user_input}, 
-            mcp_servers=selected_mcp_servers,
+            prompt_variables={"Customer Information" if input_type == "initial" else "Follow-up Question": processed_user_input}, 
             web_search=web_search_enabled
         )
         
@@ -343,8 +298,8 @@ def main():
                     model=model,
                     system_prompt=actual_system_prompt,
                     prompt_id=prompt_id,
-                    user_prompt=user_input,
-                    mcp_tools=selected_mcp_servers,
+                    user_prompt=processed_user_input,
+                    mcp_tools=mcp_tools if mcp_tools else None,
                     web_search=web_search_enabled,
                     previous_response_id=st.session_state.conversation_id
                 ):

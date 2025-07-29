@@ -19,5 +19,32 @@
       "description": "Custom screening and analysis tools for customer assessment",
       "enabled_by_default": true
     }
+  ],
+  "mcp_tools_available": [
+    {
+      "label": "Europe PMC Publications",
+      "description": "Search and retrieve publication details from Europe PMC",
+      "tools": ["search_epmc_by_orcid", "get_publication_details"]
+    },
+    {
+      "label": "NIH Grants",
+      "description": "Search and retrieve NIH grants",
+      "tools": ["search_nih_grants_by_pi_name", "search_nih_grants_by_organization", "get_nih_grant_by_number"]
+    },
+    {
+      "label": "ORCID Researcher Profile", 
+      "description": "Access researcher profile data from ORCID",
+      "tools": ["get_orcid_profile"]
+    },
+    {
+      "label": "Google Maps",
+      "description": "Locate addresses using Google Maps",
+      "tools": ["get_coordinates", "calculate_distance"]
+    },
+    {
+      "label": "Consolidated Screening List",
+      "description": "Search the Consolidated Screening List for entities",
+      "tools": ["search_screening_list"]
+    }
   ]
 }

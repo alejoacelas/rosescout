@@ -245,6 +245,7 @@ class OpenAIClient:
         request_params = {
             "model": model,
             "input": user_prompt,
+            "reasoning": {"effort": "medium"},
         }
 
         # Use prompt ID if provided, otherwise use system_prompt
@@ -311,6 +312,7 @@ class OpenAIClient:
             "model": model,
             "input": user_prompt,
             "stream": True,
+            "reasoning": {"effort": "medium"},
         }
 
         # Use prompt ID if provided, otherwise use system_prompt

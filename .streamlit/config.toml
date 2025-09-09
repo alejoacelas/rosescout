@@ -1,9 +1,9 @@
 [theme]
-primaryColor = "#E64980"
-backgroundColor = "#FFFBFF" 
-secondaryBackgroundColor = "#FCE7EC"
-textColor = "#31394D"
-linkColor = "#A23963"
+primaryColor = "#1E3A8A"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#E2E8F0"
+textColor = "#1E3A8A"
+linkColor = "#06B6D4"
 # headingFont = "Roboto"
 
 [browser]
